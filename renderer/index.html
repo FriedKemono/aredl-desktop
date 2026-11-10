@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AREDL Desktop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script>
+  // Hide the page until saved settings (theme etc.) are applied, so it never flashes the default theme.
+  document.documentElement.classList.add('booting');
+  setTimeout(() => document.documentElement.classList.remove('booting'), 1500);
+</script>
+</head>
+<body>
+
+<div class="titlebar" id="titlebar">
+  <div class="titlebar-inner">
+    <img class="titlebar-icon" src="titlebar-icon.png" alt="">
+    <span class="titlebar-title">AREDL Desktop</span>
+    <nav class="top-nav" id="topNav">
+      <i class="nav-ind nav-ind-hover" id="navHoverInd"></i>
+      <i class="nav-ind nav-ind-active" id="navActiveInd"></i>
+      <div class="top-zone" id="topNavLeft"></div>
+      <div class="nav-more" id="navMore" hidden>
+        <button class="nav-more-btn" id="navMoreBtn" type="button" aria-haspopup="true" aria-expanded="false" title="More tabs" aria-label="More tabs">
+          <svg viewBox="0 0 20 20" fill="currentColor"><circle cx="4.5" cy="10" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="15.5" cy="10" r="1.6"/></svg>
+          <span class="nav-more-dot"></span>
+        </button>
+        <div class="nav-more-panel top-zone" id="topNavMenu" data-axis="y"></div>
+      </div>
+      <div class="top-zone right" id="topNavRight"></div>
+    </nav>
+    <div class="nav-edit-bar" id="navEditBar">
+      <span id="navEditHint">Drag tabs to rearrange - drop them on the left or right side</span>
+      <button class="btn" id="navEditDone">Done</button>
+    </div>
+    <div class="titlebar-status" id="topStatus"></div>
+  </div>
+</div>
+
+<div class="page-bg" id="pageBg"></div>
+<div class="page-bg" id="pageBg2"></div>
+
+<div class="app">
+  <nav class="sidebar">
+    <div class="brand">
+      <img class="brand-logo" src="https://aredl.net/assets/logo.webp" alt="AREDL" onerror="this.remove()">
+    </div>
+
+    <button class="nav-btn active" data-tab="list">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="14" height="2.4" rx="1"/><rect x="3" y="8.8" width="14" height="2.4" rx="1"/><rect x="3" y="13.6" width="14" height="2.4" rx="1"/></svg>
+      Demon List
+    </button>
+    <button class="nav-btn" data-tab="favourites">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M10 2.8l2.2 4.6 5 .7-3.6 3.5.9 5-4.5-2.4-4.5 2.4.9-5L2.8 8.1l5-.7L10 2.8Z"/></svg>
+      Favourites
+    </button>
+    <button class="nav-btn" data-tab="personal">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3h9v4.5a4.5 4.5 0 0 1-9 0V3Z"/><path d="M5.5 5H3.2v1A3 3 0 0 0 6 9M14.5 5h2.3v1A3 3 0 0 1 14 9"/><path d="M10 12v3M7 17h6"/></svg>
+      Personal list
+    </button>
+    <button class="nav-btn" data-tab="followed">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8a4.5 4.5 0 0 1 9 0c0 4 1.5 5 1.5 5H4s1.5-1 1.5-5Z"/><path d="M8.5 16a1.7 1.7 0 0 0 3 0"/></svg>
+      Followed levels
+    </button>
+    <button class="nav-btn" data-tab="changelog">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Changelog
+    </button>
+    <button class="nav-btn" data-tab="leaderboard">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17V10M10 17V4M16 17v-5"/></svg>
+      Leaderboard
+    </button>
+    <button class="nav-btn" data-tab="profile">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c1-3.5 4-5 6.5-5s5.5 1.5 6.5 5" stroke-linecap="round"/></svg>
+      Profile
+    </button>
+    <button class="nav-btn" data-tab="submissions">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 3 3 9.5l5.5 2M17 3l-5.5 14-3-5.5M17 3 8.5 11.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Submissions
+    </button>
+    <button class="nav-btn" data-tab="notifications">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5 1.5 5h-13S5 12 5 8Z" stroke-linejoin="round"/><path d="M8 15.5a2 2 0 0 0 4 0" stroke-linecap="round"/></svg>
+      Notifications <span class="badge" id="notifBadge" hidden>0</span>
+    </button>
+    <div class="sidebar-spacer"></div>
+    <button class="nav-btn" data-tab="settings">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="10" r="2.6"/><path d="M10 3v1.6M10 15.4V17M17 10h-1.6M4.6 10H3M14.9 5.1l-1.1 1.1M6.2 13.7l-1.1 1.1M14.9 14.9l-1.1-1.1M6.2 6.3 5.1 5.1" stroke-linecap="round"/></svg>
+      Settings
+    </button>
+    <div class="signin-status" id="signinStatus">Not signed in</div>
+  </nav>
+
+  <main class="content">
+
+    <section class="tab active" id="tab-list">
+      <div class="tab-header">
+        <div class="controls">
+          <div class="search-wrap">
+            <input id="search" type="text" placeholder="Search levels" autocomplete="off">
+            <button class="search-info-btn" id="searchInfoBtn" type="button" title="How searching works" aria-label="How searching works">i</button>
+          </div>
+          <button class="btn btn-ghost icon-btn" id="searchClearBtn" title="Clear search" hidden>
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 5l10 10M15 5 5 15"/></svg>
+          </button>
+          <button class="btn btn-ghost icon-btn" id="tagFilterBtn" title="Filter by tag">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10 10 3h5a2 2 0 0 1 2 2v5l-7 7a1.4 1.4 0 0 1-2 0L3 12a1.4 1.4 0 0 1 0-2Z" stroke-linejoin="round"/><circle cx="13.3" cy="6.7" r="1"/></svg>
+            <span id="tagFilterCount" class="badge" hidden>0</span>
+          </button>
+          <select id="statusFilter"></select>
+          <select id="sortBy">
+            <option value="position">Sort: Position</option>
+            <option value="points">Sort: Points</option>
+            <option value="name">Sort: A–Z</option>
+          </select>
+          <label class="checkbox-wrap" id="completedFilterWrap" hidden>
+            <input type="checkbox" id="completedOnly"> Completed only
+          </label>
+          <button class="refresh-btn" id="refreshBtn" data-refresh="list" title="Reload the list and the selected level">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="collapse" id="tagFilterCollapse"><div class="collapse-inner">
+        <div id="tagFilterPanel" class="tag-filter-panel">
+          <div class="tag-filter-head">
+            <span class="dim" style="margin:0;">Click a tag: green = must have, red = must not have.</span>
+            <button class="linklike" id="tagFilterClear">Clear all</button>
+          </div>
+          <div id="tagFilterPills" class="tag-filter-pills"></div>
+        </div>
+        </div></div>
+        <div class="meta-row">
+          <span id="countLabel" class="debug-info">Loading…</span>
+        </div>
+        <div id="listRawZone" class="debug-info"></div>
+      </div>
+      <div id="listState" class="state"><div class="spinner"></div>Fetching live data…</div>
+      <div class="list-layout" id="listLayout" hidden>
+        <div class="list-col" id="list"></div>
+        <div class="list-sticky-label" id="listStickyLabel"><span></span></div>
+        <div class="detail-col" id="detailCol">
+          <div class="detail-scroll" id="detailInner">
+            <div class="detail-placeholder">Select a level on the left to see its details.</div>
+          </div>
+        </div>
+        <div class="records-col" id="recordsCol" hidden>
+          <div class="records-header">
+            <h3>Records <span id="recordsCount"></span></h3>
+            <div class="search-wrap"><input id="recordsSearch" type="text" placeholder="Search"></div>
+          </div>
+          <div id="recordsList" class="records-list"></div>
+          <div id="recordsPager" class="records-pager"></div>
+          <div id="recordsMore" class="records-more"></div>
+          <div id="recordsRawZone" class="records-raw"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-favourites">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Favourites <span class="dim-count" id="favCount"></span></h2>
+          <select id="favSortBy">
+            <option value="position">Sort: Position</option>
+            <option value="list">Sort: List (Main / Extended…)</option>
+            <option value="category">Sort: Category</option>
+          </select>
+        </div>
+        <p class="dim" style="margin:0;">Right-click a level in the Demon List to favourite it. Click a level here to open it in the list.</p>
+      </div>
+      <div id="favList" class="fav-list"></div>
+    </section>
+
+    <section class="tab" id="tab-personal">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Personal list <span class="dim-count" id="plCount"></span></h2>
+          <div class="title-actions">
+            <select id="plSort">
+              <option value="hardest">Sort: Hardest first</option>
+              <option value="placement">Sort: AREDL placement</option>
+              <option value="date">Sort: Newest completion</option>
+              <option value="attempts">Sort: Most attempts</option>
+              <option value="name">Sort: Name</option>
+            </select>
+            <button class="refresh-btn" id="plCopyBtn" title="Copy the whole list as CSV, ready to paste into a spreadsheet">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="10" height="11" rx="2"/><path d="M4 13V5a2 2 0 0 1 2-2h7"/></svg>
+              <span>Copy as CSV</span>
+            </button>
+            <button class="btn" id="plAddBtn">+ Add level</button>
+          </div>
+        </div>
+        <p class="dim" style="margin:0;">Your own hardest-levels list: attempts, physics, version, clears, date and video for each level you've beaten, plus your runs (like 53-79 or 20-100). Use the pencil on a row to edit it.</p>
+      </div>
+      <div class="pl-scroll"><div class="pl-table" id="plTable"></div></div>
+      <div id="plProgressWrap" hidden>
+        <div class="pl-section-bar">
+          <div class="pl-section-title">Runs <span class="dim-count" id="plProgressCount"></span></div>
+          <select id="plProgressSort">
+            <option value="run">Sort: Run size</option>
+            <option value="furthest">Sort: Furthest %</option>
+            <option value="placement">Sort: AREDL placement</option>
+            <option value="tier">Sort: Hardest tier</option>
+            <option value="attempts">Sort: Most attempts</option>
+            <option value="recent">Sort: Most recent</option>
+            <option value="name">Sort: Name</option>
+          </select>
+        </div>
+        <div class="pl-scroll"><div class="pl-table" id="plProgress"></div></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-followed">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Followed levels <span class="dim-count" id="followCount"></span></h2>
+          <button class="refresh-btn" id="followCheckBtn" title="Check followed levels for changes now">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Check now</span>
+          </button>
+        </div>
+        <p class="dim" style="margin:0;" id="followHint">Right-click a level in the Demon List and choose Follow level. Updates are checked once when the app starts and then on the interval you pick in Settings (every 2 minutes by default). They show up in the Notifications tab.</p>
+      </div>
+      <div id="followList" class="follow-list"></div>
+    </section>
+
+    <section class="tab" id="tab-leaderboard">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Leaderboard <span class="dim-count" id="lbCount"></span></h2>
+          <div class="title-actions">
+            <div class="search-wrap lb-search"><input id="lbSearch" type="text" placeholder="Search this page" autocomplete="off"></div>
+            <button class="refresh-btn" id="lbRefreshBtn" title="Reload this page of the leaderboard">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+              <span>Refresh</span>
+            </button>
+          </div>
+        </div>
+        <p class="dim" style="margin:0;" id="lbInfo"></p>
+      </div>
+      <div class="lb-scroll"><div class="lb-table" id="lbTable"></div></div>
+      <div class="lb-pager" id="lbPager"></div>
+    </section>
+
+    <section class="tab" id="tab-changelog">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Changelog</h2>
+          <button class="refresh-btn" id="changelogRefreshBtn" data-refresh="changelog" title="Reload the changelog">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="legend" id="changelogLegend">
+          <button class="filter-pill" data-changelog-filter="placed" style="--c:#3b82f6"><i class="dot"></i>Placed</button>
+          <button class="filter-pill" data-changelog-filter="raised" style="--c:#22c55e"><i class="dot"></i>Raised</button>
+          <button class="filter-pill" data-changelog-filter="lowered" style="--c:#f87171"><i class="dot"></i>Lowered</button>
+          <button class="filter-pill" data-changelog-filter="swapped" style="--c:#fb923c"><i class="dot"></i>Swapped</button>
+          <button class="filter-pill" data-changelog-filter="pending" style="--c:#eab308"><i class="dot"></i>Pending</button>
+          <button class="filter-pill" data-changelog-filter="removed" style="--c:#991b1b"><i class="dot"></i>Removed</button>
+          <button class="filter-pill" data-changelog-filter="movedtolegacy" style="--c:#9a3412"><i class="dot"></i>Moved to legacy</button>
+          <button class="filter-pill filter-clear" id="changelogFilterClear" hidden>Clear filter</button>
+        </div>
+      </div>
+      <div id="changelogState" class="state"></div>
+      <div id="changelogList"></div>
+      <div id="changelogRawZone" class="debug-info"></div>
+    </section>
+
+    <section class="tab" id="tab-profile">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Profile</h2>
+          <button class="refresh-btn" id="profileRefreshBtn" data-refresh="profile" title="Reload this profile">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="controls">
+          <div class="search-wrap">
+            <input id="profileLookup" type="text" placeholder="Publisher ID to look up (optional)…" autocomplete="off">
+          </div>
+          <button id="profileLookupBtn" class="btn">Look up</button>
+          <button id="myProfileBtn" class="btn btn-ghost">My profile</button>
+        </div>
+      </div>
+      <div id="profileState" class="state">Sign in from Settings to view your profile, or paste a publisher ID above to look someone up.</div>
+      <div id="profileContent"></div>
+    </section>
+
+    <section class="tab" id="tab-submissions">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>My Submissions</h2>
+          <button class="refresh-btn" id="submissionsRefreshBtn" data-refresh="submissions" title="Reload your submissions">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="controls">
+          <select id="submissionsSortBy">
+            <option value="status" selected>Sort: Status</option>
+            <option value="changed">Sort: Last changed</option>
+            <option value="submitted">Sort: Submission time</option>
+            <option value="position">Sort: Queue position</option>
+          </select>
+        </div>
+      </div>
+      <div id="submissionsState" class="state">Sign in from Settings to see your submissions.</div>
+      <div id="submissionsList"></div>
+      <div id="submissionsRawZone" class="debug-info"></div>
+    </section>
+
+    <section class="tab" id="tab-notifications">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Notifications</h2>
+          <div class="title-actions">
+          <button class="refresh-btn" id="notifClearAllBtn" title="Hide every notification currently shown" hidden>
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M8 6V4h4v2M6 6l.7 10h6.6L14 6M8.5 9v4.5M11.5 9v4.5"/></svg>
+            <span>Clear all</span>
+          </button>
+          <button class="refresh-btn" id="notifRefreshBtn" data-refresh="notifications" title="Reload notifications">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Refresh</span>
+          </button>
+          </div>
+        </div>
+      </div>
+      <div id="notifState" class="state">Sign in from Settings to see notifications.</div>
+      <div id="notifList"></div>
+      <div id="notifRawZone" class="debug-info"></div>
+    </section>
+
+    <section class="tab" id="tab-settings">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Settings</h2>
+          <button class="refresh-btn" id="settingsRefreshBtn" data-refresh="settings" title="Refresh sign-in status and the request log">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+      <h3 class="settings-section">Account</h3>
+      <div class="settings-card">
+        <h3>Sign in</h3>
+        <p class="dim">Paste your AREDL API key to enable your profile, completed-levels view, submissions, and desktop notifications. The key is encrypted with your OS keychain and stored only on this machine — it is never sent anywhere except api.aredl.net.</p>
+        <div class="signin-row">
+          <input id="apiKeyInput" type="password" placeholder="API key" autocomplete="off">
+          <button id="signInBtn" class="btn">Sign in</button>
+          <button id="signOutBtn" class="btn btn-ghost" hidden>Sign out</button>
+        </div>
+        <div id="signinMsg" class="msg"></div>
+      </div>
+
+      <h3 class="settings-section">App preferences</h3>
+      <div class="settings-card">
+        <h3>Theme</h3>
+        <p class="dim">Pick a colour scheme. Glass and Adaptive Glass are see-through; Adaptive Glass also takes its colours from the level you're looking at.</p>
+        <div id="themePicker" class="theme-picker"></div>
+      </div>
+      <div class="settings-card">
+        <h3>Appearance</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Accent colour</strong><small>Replaces the theme's highlight colour. (Adaptive Glass picks its own from the backdrop.)</small></div>
+            <div class="color-wrap">
+              <input type="color" id="accentCustom" value="#ff6f00">
+              <button class="btn btn-ghost small-btn" id="accentReset">Reset</button>
+            </div>
+          </div>
+          <div class="setting-line slider-line">
+            <div class="setting-label"><strong>Corner roundness</strong><small>How rounded cards and panels are.</small></div>
+            <div class="slider-wrap"><input type="range" id="radiusSlider" min="4" max="28" step="1" data-suffix="px" data-default="14"><output id="radiusOut"></output></div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>List density</strong><small>How tall the rows in the Demon List are.</small></div>
+            <select id="densitySelect">
+              <option value="comfortable">Comfortable</option>
+              <option value="compact">Compact</option>
+            </select>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Motion</strong><small>Turns off page, menu and background animations.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="reduceMotion"> Reduce animations</label>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card" id="adaptiveCard">
+        <h3>Adaptive Glass</h3>
+        <p class="dim">These only apply while the Adaptive Glass theme is selected.</p>
+        <div class="setting-lines" id="adaptiveOptions">
+          <div class="setting-line slider-line">
+            <div class="setting-label"><strong>Glass tint</strong><small>How strongly the glass picks up the colour of the backdrop (0 = none). The accent colour isn't affected.</small></div>
+            <div class="slider-wrap"><input type="range" id="adaptiveTint" min="0" max="100" step="1" data-suffix="%"><output id="adaptiveTintOut"></output></div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Colour method</strong><small>Gamma-corrected average blends the whole picture in linear light and tones it down. Most vivid picks the single punchiest colour.</small></div>
+            <select id="adaptiveMethod">
+              <option value="gamma">Gamma-corrected average</option>
+              <option value="vivid">Most vivid colour (original)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <h3>Dates</h3>
+        <div class="setting-lines">
+          <div class="setting-line slider-line">
+            <div class="setting-label"><strong>Relative time decimal precision</strong><small>How precisely "x days ago" is written. 0 shows "3 days ago", 2 shows "3.25 days ago".</small></div>
+            <div class="slider-wrap"><input type="range" id="dateDpSlider" min="0" max="2" step="1" data-suffix=" dp"><output id="dateDpOut"></output></div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <h3>Background</h3>
+        <div class="setting-lines">
+          <div class="setting-line slider-line">
+            <div class="setting-label"><strong>Background blur</strong><small>How blurred the level backdrop is. The mark on the slider is the default (60, or 54 on the Glass themes); Reset puts it back.</small></div>
+            <div class="slider-wrap">
+              <input type="range" id="bgBlurSlider" min="0" max="140" step="1" data-suffix="px" data-default="60">
+              <output id="bgBlurOut"></output>
+              <button class="btn btn-ghost small-btn" id="bgBlurReset">Reset</button>
+            </div>
+          </div>
+          <div class="setting-line slider-line">
+            <div class="setting-label"><strong>Background brightness</strong><small>How bright the backdrop is behind everything. The mark is the default (32, or 50 on the Glass themes).</small></div>
+            <div class="slider-wrap">
+              <input type="range" id="bgBrightSlider" min="5" max="100" step="1" data-suffix="%" data-default="32">
+              <output id="bgBrightOut"></output>
+              <button class="btn btn-ghost small-btn" id="bgBrightReset">Reset</button>
+            </div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Backdrop</strong><small>The blurred picture of the level you last looked at.</small></div>
+            <div class="toggle-stack">
+              <label class="checkbox-wrap"><input type="checkbox" id="bgShow"> Show it</label>
+              <label class="checkbox-wrap"><input type="checkbox" id="bgDrift"> Let it drift slowly</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card">
+        <h3>Videos</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>When a playing video isn't on screen</strong><small>For example after you switch tab or scroll it away.</small></div>
+            <select id="videoLeaveSelect">
+              <option value="popup">Move it to a corner player</option>
+              <option value="background">Keep playing (sound only)</option>
+              <option value="pause">Pause it</option>
+              <option value="stop">Stop it</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card" id="navCard">
+        <h3>Navigation</h3>
+        <div class="setting-lines">
+          <div class="setting-line" id="navTopWrap" hidden>
+            <div class="setting-label"><strong>Tabs in the top bar</strong><small>Moves the tabs out of the side bar and into the title bar.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="navTopToggle"> Show in top bar</label>
+          </div>
+        <div id="navTopOptions" hidden>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Tab names in the top bar</strong><small>Icons-only tabs expand when you hover them.</small></div>
+            <select id="navCompactSelect">
+              <option value="off">Always show names</option>
+              <option value="always">Icons only (hover to expand)</option>
+              <option value="fullscreen">Icons only in fullscreen</option>
+            </select>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Menu button for extra tabs</strong><small>Adds a small button to the top bar. Tabs you drop into it (while reordering) tuck away inside, so the bar doesn't get crowded.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="navMenuToggle"> Use a menu button</label>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Order and side of the tabs</strong><small>Drag tabs around, and drop them on the left, the right, or into the menu button.</small></div>
+            <button class="btn btn-ghost" id="navReorderBtn">Reorder tabs</button>
+          </div>
+        </div>
+        </div>
+        <p class="dim" id="navNoTitlebar" style="margin:0;">The top bar tabs are only available on Windows. Press F11 for fullscreen.</p>
+      </div>
+
+      <div class="settings-card">
+        <h3>Startup &amp; updates</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Open on</strong><small>The tab shown when the app starts.</small></div>
+            <select id="startTabSelect">
+              <option value="list">Demon List</option>
+              <option value="favourites">Favourites</option>
+              <option value="followed">Followed levels</option>
+              <option value="personal">Personal list</option>
+              <option value="changelog">Changelog</option>
+              <option value="leaderboard">Leaderboard</option>
+              <option value="profile">Profile</option>
+              <option value="submissions">Submissions</option>
+              <option value="notifications">Notifications</option>
+            </select>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Check followed levels</strong><small>How often followed levels are checked for changes while the app is running. They're always checked once at startup.</small></div>
+            <select id="followMinsSelect">
+              <option value="1">Every minute</option>
+              <option value="2">Every 2 minutes</option>
+              <option value="5">Every 5 minutes</option>
+              <option value="10">Every 10 minutes</option>
+              <option value="30">Every 30 minutes</option>
+              <option value="0">Only at startup / Check now</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <h3 class="settings-section">Advanced</h3>
+      <div class="settings-card">
+        <h3>Developer</h3>
+        <label class="checkbox-wrap"><input type="checkbox" id="showRawToggle"> Show raw API responses (the "Full API response" blocks)</label>
+      </div>
+      <div class="settings-card wide">
+        <h3>API request log</h3>
+        <p class="dim">Every request this app makes to api.aredl.net, most recent first, with what it was for. Kept in memory only for this session.</p>
+        <div id="apiRate" class="api-rate"></div>
+        <div id="apiLogList" class="api-log-list"></div>
+      </div>
+
+      <h3 class="settings-section">About</h3>
+      <div class="settings-card wide">
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Version <span id="appVersion">…</span></strong><small id="updateStatus">The installed app checks for updates by itself and asks before restarting.</small></div>
+            <button class="btn btn-ghost" id="updateCheckBtn" type="button">Check for updates</button>
+          </div>
+        </div>
+        <p class="dim" style="margin:12px 0 0;">
+          Unofficial desktop client for the All Rated Extreme Demons List. Not affiliated with
+          aredl.net or RobTop Games. Level data, profile, notification and changelog endpoints
+          are the public AREDL API — some endpoint paths were inferred and may need adjusting in
+          <code>main.js</code> if AREDL changes their API shape.
+        </p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-backdrop" id="searchHelp" hidden>
+  <div class="modal" role="dialog" aria-label="Searching the list">
+    <div class="modal-head"><h3>Searching the list</h3><button class="icon-tool" id="searchHelpClose" aria-label="Close">✕</button></div>
+    <div class="modal-body">
+      <p class="dim">Everything below can be mixed in one search box.</p>
+      <div class="help-grid">
+        <code>acheron</code><span>Any level whose name, tags or description contains the text.</span>
+        <code>"acheron"</code><span>Quotes: the level's <em>name</em> must be exactly that (capitals ignored). Tags and descriptions aren't checked.</span>
+        <code>'ache'</code><span>Single quotes: the level <em>name</em> must <em>contain</em> that text. Tags and descriptions aren't checked.</span>
+        <code>acheron || bloodbath</code><span><b>||</b> means "or" - levels matching any of the parts.</span>
+        <code>id:61598653</code><span>Level ID. Part of an ID works too.</span>
+        <code>song:844658</code><span>Song ID (from Newgrounds / the level info).</span>
+        <code>tag:wave</code><span>Levels with a tag containing the text. Use quotes for spaces: <code>tag:"high cps"</code></span>
+        <code>pos:50</code><span>Exact placement. Also <code>pos:1-75</code>, <code>pos:&gt;150</code>, <code>pos:&lt;=20</code></span>
+        <code>status:extended</code><span><code>main</code>, <code>extended</code>, <code>legacy</code>, <code>pending</code> or <code>removed</code>.</span>
+      </div>
+      <h4>Putting them together</h4>
+      <div class="help-grid">
+        <code>tag:wave pos:&lt;=150</code><span>Filters in one part must <b>all</b> match.</span>
+        <code>tag:wave status:main || "fog"</code><span>Each part around <b>||</b> is checked on its own, then combined with "or".</span>
+        <code>sonic tag:2p</code><span>Filters and plain text together: both have to match.</span>
+      </div>
+      <p class="dim" style="margin-bottom:0;">The tag button and the status / sort menus narrow the results further, on top of whatever you type.</p>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="plModal" hidden>
+  <div class="modal pl-modal" role="dialog" aria-label="Personal list entry">
+    <div class="modal-head"><h3 id="plModalTitle">Add level</h3><button class="icon-tool" id="plModalClose" aria-label="Close">✕</button></div>
+    <div class="modal-body">
+      <div class="pl-picker">
+        <label class="pl-label">Level</label>
+        <div class="pl-picker-box">
+          <input type="text" id="plLevelSearch" class="pl-input" placeholder="Search the list by name or ID…" autocomplete="off">
+          <div class="pl-results" id="plLevelResults" hidden></div>
+        </div>
+      </div>
+      <div class="pl-chosen" id="plChosen"></div>
+
+      <h4>Filled in from the list <small>(switch "Auto" off to type your own)</small></h4>
+      <div class="pl-fields">
+        <div class="pl-field"><label class="pl-label" for="plName">Name</label><input class="pl-input" id="plName" type="text"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoName" checked> Auto</label></div>
+        <div class="pl-field"><label class="pl-label" for="plId">Level ID</label><input class="pl-input" id="plId" type="text" inputmode="numeric"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoId" checked> Auto</label></div>
+        <div class="pl-field"><label class="pl-label" for="plPlacement">AREDL placement</label><input class="pl-input" id="plPlacement" type="text" placeholder="Top 483"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoPlacement" checked> Auto</label></div>
+        <div class="pl-field"><label class="pl-label" for="plTier">Tier (GDDL)</label><input class="pl-input" id="plTier" type="text" inputmode="decimal"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoTier" checked> Auto</label></div>
+        <div class="pl-field"><label class="pl-label" for="plPoints">List points</label><input class="pl-input" id="plPoints" type="text" inputmode="decimal"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoPoints" checked> Auto</label></div>
+      </div>
+
+      <h4>Your run</h4>
+      <div class="pl-fields">
+        <div class="pl-field"><label class="pl-label" for="plPercent">Progress (%)</label><input class="pl-input" id="plPercent" type="text" inputmode="numeric" value="100" placeholder="100 or 53-79" autocomplete="off"><span class="pl-hint">A % or a run like 53-79. Anything under 100, or with a start (like 20-100), goes in Runs</span></div>
+        <div class="pl-field"><label class="pl-label" for="plDifficulty">Difficulty</label><select id="plDifficulty"><option value="">—</option><option value="Bizarre Demon" data-color="#a63a1b">Bizarre Demon</option><option value="Brutal Demon" data-color="#9a3216">Brutal Demon</option><option value="Extreme Demon" data-color="#8e2d13">Extreme Demon</option><option value="Radical Demon" data-color="#832810">Radical Demon</option><option value="Supreme Demon" data-color="#78230d">Supreme Demon</option><option value="Ultimate Demon" data-color="#6a1f0b">Ultimate Demon</option><option value="Horrendous Demon" data-color="#5b1a09">Horrendous Demon</option><option value="Inhumane Demon" data-color="#4b0e10">Inhumane Demon</option><option value="Slaughter Demon" data-color="#3f0f24">Slaughter Demon</option><option value="Apocalyptic Demon" data-color="#35113f">Apocalyptic Demon</option><option value="Divine Demon" data-color="#2a0f4a">Divine Demon</option><option value="Silent Demon" data-color="#1b0a30">Silent Demon</option><option value="Infinite Demon" data-color="#000000">Infinite Demon</option></select></div>
+        <div class="pl-field"><label class="pl-label" for="plAttempts">Attempts</label><input class="pl-input" id="plAttempts" type="number" min="0" step="1" placeholder="15420"></div>
+        <div class="pl-field"><label class="pl-label" for="plVersion">Version</label><input class="pl-input" id="plVersion" type="text" placeholder="2.2081"></div>
+        <div class="pl-field"><label class="pl-label" for="plPhysics">Physics</label><div class="pl-suffix-wrap"><input class="pl-input" id="plPhysics" type="text" placeholder="follows Version"><span class="pl-suffix">Phys</span></div><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoPhysics" checked> Auto</label></div>
+        <div class="pl-field"><label class="pl-label" for="plClears">Completions</label><input class="pl-input" id="plClears" type="number" min="1" step="1" value="1"></div>
+        <div class="pl-field"><label class="pl-label" id="plDateLabel" for="plDay">Date completed</label><input type="hidden" id="plDate">
+          <div class="pl-date" id="plDateField">
+            <input class="pl-seg" id="plDay" type="text" inputmode="numeric" maxlength="2" placeholder="DD" aria-label="Day" autocomplete="off">
+            <span>/</span>
+            <input class="pl-seg" id="plMonth" type="text" inputmode="numeric" maxlength="2" placeholder="MM" aria-label="Month" autocomplete="off">
+            <span>/</span>
+            <input class="pl-seg wide" id="plYear" type="text" inputmode="numeric" maxlength="4" placeholder="YYYY" aria-label="Year" autocomplete="off">
+            <button type="button" class="pl-cal-btn" id="plDateBtn" aria-label="Pick from a calendar" title="Pick from a calendar"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="12.5" rx="3"/><path d="M3 8.5h14M7 3v3M13 3v3"/></svg></button>
+          </div></div>
+        <div class="pl-field"><label class="pl-label" for="plVideo">Video link</label><input class="pl-input" id="plVideo" type="url" placeholder="https://youtube.com/watch?v=…"></div>
+      </div>
+
+      <div class="pl-actions">
+        <button class="btn btn-ghost" id="plDelete" hidden>Delete</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" id="plCancel">Cancel</button>
+        <button class="btn" id="plSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<template id="dockTemplate"><div class="video-dock off">
+  <iframe title="Video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+  <div class="mp-bar">
+    <span class="mp-title"></span>
+    <button class="mp-btn" data-mp="return" title="Back to the level" aria-label="Back to the level"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5L3.5 9.5 8 14"/><path d="M3.5 9.5H12a4.5 4.5 0 0 1 4.5 4.5v1"/></svg></button>
+    <button class="mp-btn" data-mp="close" title="Close player" aria-label="Close player"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
+  </div>
+  <div class="mp-resize" data-edge="tl"></div>
+  <div class="mp-resize" data-edge="tr"></div>
+  <div class="mp-resize" data-edge="bl"></div>
+  <div class="mp-resize" data-edge="br"></div>
+</div>
+</template>
+
+<script src="countries.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
