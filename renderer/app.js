@@ -783,7 +783,7 @@ async function initSettings() {
   const dpNow = Number.isFinite(appSettings.dateDp) ? appSettings.dateDp : 2;
   $('#dateDpSlider').value = dpNow;
   $('#dateDpOut').textContent = `${dpNow} dp`;
-  $('#favSortBy').value = appSettings.favSort || 'position';
+  $('#favSortBy').value = appSettings.favSort || 'category';
   $('#navNoTitlebar').hidden = document.body.classList.contains('custom-titlebar');
   applyTheme(appSettings.theme || 'default');
   if (document.body.classList.contains('custom-titlebar')) {
@@ -1020,9 +1020,10 @@ async function loadLevels() {
 
 function populateStatusFilter(data) {
   const statuses = [...new Set(data.map(l => l.status).filter(Boolean))];
-  const preferred = statuses.includes('MainList') ? 'MainList' : statuses[0];
+  const previous = $('#statusFilter').value; // keep what you picked when the list reloads
   $('#statusFilter').innerHTML = `<option value="__all__">All statuses</option>` +
-    statuses.map(s => `<option value="${escapeHtml(s)}" ${s === preferred ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+    statuses.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  $('#statusFilter').value = statuses.includes(previous) ? previous : '__all__'; // starts on All statuses
 }
 
 // Search syntax (also explained in the "i" popup next to the search box):
@@ -1398,7 +1399,7 @@ function renderFavourites() {
   };
 
   // Sorting by list or category groups the cards under coloured headers.
-  const sortMode = appSettings.favSort || 'position';
+  const sortMode = appSettings.favSort || 'category';
   const isDone = (r) => state.completedIds.has(String(r.level_id));
   const groupBy = (keyOf, nameOf, colorOf, order) => {
     const by = new Map();
@@ -5302,6 +5303,8 @@ document.querySelectorAll('input[type=range]').forEach(enhanceSlider);
   await initSettings();
   if (appSettings.startTab && appSettings.startTab !== 'list') showTab(appSettings.startTab);
   await refreshAuthStatus();
+  window.appBooted = true; // settings are loaded: tour.js (loaded after this file) starts the first-open tour from this signal
+  window.dispatchEvent(new Event('aredl:ready'));
   await loadLevels();
   startFollowing();
 })();

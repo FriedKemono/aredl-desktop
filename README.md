@@ -130,3 +130,11 @@ To release an update:
    they press **Check for updates** in Settings → About), download it quietly and ask to restart.
 
 No GitHub Actions? From your own PC, set a token first (`set GH_TOKEN=your_token`) and run `npm run release`.
+
+## App tour
+
+The first time the app opens (and once for anyone updating from a version without it) a guided tour walks
+through search filters, the right-click menu, the personal list, favourites, followed levels, adaptive glass,
+the top-bar tabs and reordering, multi-select and the buttons by a level's name. Replay it any time from
+**Settings → About → Replay tour**. The tour lives in `renderer/tour.js`; raise `TOUR_VERSION` there to show
+it again to everyone after adding big new features.
