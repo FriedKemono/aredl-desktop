@@ -1,6 +1,6 @@
 {
   "name": "aredl-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AREDL Desktop",
   "main": "main.js",
   "author": "you",
@@ -9,7 +9,8 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win nsis portable --publish never",
-    "release": "electron-builder --win nsis portable --publish always"
+    "release": "electron-builder --win nsis portable --publish always",
+    "ship": "node scripts/ship.js"
   },
   "dependencies": {
     "electron-updater": "^6.3.9"
@@ -54,8 +55,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "YOUR_GITHUB_USERNAME",
-      "repo": "YOUR_REPO_NAME",
+      "owner": "FriedKemono",
+      "repo": "aredl-desktop",
       "releaseType": "release"
     }
   }
