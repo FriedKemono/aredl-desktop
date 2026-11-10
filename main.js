@@ -478,7 +478,20 @@ ipcMain.handle('window:setOverlay', async (_e, { color, symbolColor } = {}) => {
   }
 });
 
-ipcMain.handle('api:getLevels', async () => apiFetch(ENDPOINTS.levels));
+// The last level list is kept on disk so the next start-up can show it instantly while the live one loads.
+// (It's only reused when you're signed in the same way as when it was saved, so ticks never leak between accounts.)
+const levelsCacheFile = () => path.join(app.getPath('userData'), 'levels-cache.json');
+ipcMain.handle('api:getLevels', async () => {
+  const data = await apiFetch(ENDPOINTS.levels);
+  fs.promises.writeFile(levelsCacheFile(), JSON.stringify({ hadKey: !!loadApiKey(), savedAt: Date.now(), levels: data })).catch(() => {});
+  return data;
+});
+ipcMain.handle('api:getCachedLevels', async () => {
+  try {
+    const c = JSON.parse(await fs.promises.readFile(levelsCacheFile(), 'utf8'));
+    return c && c.hadKey === !!loadApiKey() && Array.isArray(c.levels) ? c.levels : null;
+  } catch { return null; }
+});
 
 ipcMain.handle('api:getChangelog', async (_e, page) => apiFetch(ENDPOINTS.changelog(page || 1)));
 

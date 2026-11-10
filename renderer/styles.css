@@ -978,14 +978,19 @@ body.glassy .page-bg.on{opacity:.85;}
 body.glassy .notif-item,body.glassy .change-entry,body.glassy .submission-card,body.glassy .settings-card,
 body.glassy .profile-card,body.glassy .pack-banner,body.glassy .theme-card,body.glassy .profile-side,
 body.glassy .profile-main,body.glassy .fav-card,body.glassy .follow-card,body.glassy .list-col,
-body.glassy .detail-col,body.glassy .records-col,body.glassy .stat,body.glassy .completed-banner,
-body.glassy .tag-filter-panel,body.glassy .multi-caption,body.glassy .state,
-body.glassy .sidebar,body.glassy.custom-titlebar .titlebar,
-body.glassy input[type=text],body.glassy input[type=password],body.glassy select,body.glassy .btn-ghost,
-body.glassy .refresh-btn,body.glassy .filter-pill,body.glassy .opt-pill,body.glassy .icon-tool,
-body.glassy .multi-nav,body.glassy .controls .checkbox-wrap,body.glassy .ctx-menu{
+body.glassy .detail-col,body.glassy .records-col,body.glassy .completed-banner,
+body.glassy .tag-filter-panel,body.glassy .state,
+body.glassy .sidebar,body.glassy.custom-titlebar .titlebar,body.glassy .ctx-menu{
   background-color:var(--glass);
   backdrop-filter:blur(var(--glass-blur,22px)) saturate(1.6);-webkit-backdrop-filter:blur(var(--glass-blur,22px)) saturate(1.6);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 0 0 1px rgba(255,255,255,.04),0 10px 30px rgba(0,0,0,.28);
+}
+/* small controls: same translucent look, but no blur pass of their own (dozens of them per screen made scrolling and resizing heavy) */
+body.glassy .stat,body.glassy .multi-caption,
+body.glassy input[type=text],body.glassy input[type=password],body.glassy select,body.glassy .btn-ghost,
+body.glassy .refresh-btn,body.glassy .filter-pill,body.glassy .opt-pill,body.glassy .icon-tool,
+body.glassy .multi-nav,body.glassy .controls .checkbox-wrap{
+  background-color:var(--glass);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 0 0 1px rgba(255,255,255,.04),0 10px 30px rgba(0,0,0,.28);
 }
 body.glassy .detail-col,body.glassy .records-col{background:var(--glass);}
@@ -1948,3 +1953,13 @@ body.nav-editing .titlebar-title{display:none;}
 /* the heading's line runs on across the whole width, like the section headings in Settings */
 .pl-subhead::after{content:'';flex:1;height:1px;background:linear-gradient(to right,var(--border),transparent);}
 .pl-sub-runs.none{color:var(--text-faint);background:none;border-color:var(--border);font-weight:600;}
+
+
+/* Settings: a card that spans the whole width right after another card lost its top gap
+   (a column layout drops the last card's bottom margin before a full-width item) */
+#tab-settings > .settings-card + .settings-card.wide{margin-top:16px;}
+
+/* row icons are only added to favourited / followed rows, so keep them in order after the name */
+.list-row .follow-mini{order:5;}
+.list-row .fav-mini{order:6;}
+.list-row .check-mini{order:7;}

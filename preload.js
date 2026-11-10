@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('aredl', {
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   getLevels: () => ipcRenderer.invoke('api:getLevels'),
+  getCachedLevels: () => ipcRenderer.invoke('api:getCachedLevels'),
   getChangelog: (page) => ipcRenderer.invoke('api:getChangelog', page),
   getLeaderboard: (page) => ipcRenderer.invoke('api:getLeaderboard', page),
   getProfile: (id) => ipcRenderer.invoke('api:getProfile', id),

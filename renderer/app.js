@@ -32,6 +32,27 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) pause
 
 const escapeHtml = (str) => str == null ? '' : String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// "Full API response" boxes. They used to pretty-print and escape the whole response every time a
+// page loaded - megabytes of text nobody had asked to see. Now the text is only built when the box is opened.
+const rawJsonStore = new Map();
+let rawJsonSeq = 0;
+function rawDetails(summaryHtml, data, attrs = '') {
+  const id = String(++rawJsonSeq);
+  rawJsonStore.set(id, data);
+  if (rawJsonStore.size > 300) rawJsonStore.delete(rawJsonStore.keys().next().value); // boxes nobody opens don't pile up
+  return `<details class="debug-info"${attrs} data-raw="${id}"><summary>${summaryHtml}</summary><div class="raw-json"></div></details>`;
+}
+document.addEventListener('toggle', (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.open || !d.dataset.raw) return;
+  const box = d.querySelector('.raw-json');
+  if (!box || box.dataset.filled) return;
+  const data = rawJsonStore.get(d.dataset.raw);
+  box.textContent = data === undefined ? '(no longer available - reload this view)' : JSON.stringify(data, null, 2);
+  box.dataset.filled = '1';
+  rawJsonStore.delete(d.dataset.raw);
+}, true);
+
 // Electron wraps errors thrown in the main process as
 // "Error invoking remote method 'x': Error: <message>" - strip that so the UI
 // only ever shows the actual reason.
@@ -961,15 +982,35 @@ async function loadLevels() {
   stateEl.className = 'state';
   stateEl.innerHTML = '<div class="spinner"></div>Fetching live data…';
   $('#countLabel').textContent = 'Loading…';
+  let liveDone = false;
   try {
-    const data = await window.aredl.getLevels();
+    const live = window.aredl.getLevels(); // start the real request first...
+    if (!state.levels.length && window.aredl.getCachedLevels) {
+      // ...and meanwhile show the list saved last time, so the app is usable straight away
+      window.aredl.getCachedLevels().then(saved => {
+        if (liveDone || !Array.isArray(saved) || !saved.length) return;
+        state.levels = saved;
+        extractCompletedFromLevels(saved);
+        populateStatusFilter(saved);
+        applyFilters();
+        $('#countLabel').textContent += ' · updating…';
+      }).catch(() => {});
+    }
+    const data = await live;
+    liveDone = true;
     if (!Array.isArray(data) || !data.length) throw new Error('Empty response');
     state.levels = data;
     extractCompletedFromLevels(data);
     populateStatusFilter(data);
     applyFilters();
-    $('#listRawZone').innerHTML = `<details class="debug-info"><summary>Full API response (${data.length.toLocaleString()} levels)</summary><div class="raw-json">${escapeHtml(JSON.stringify(data, null, 2))}</div></details>`;
+    $('#listRawZone').innerHTML = `${rawDetails(`Full API response (${data.length.toLocaleString()} levels)`, data)}`;
   } catch (err) {
+    liveDone = true;
+    if (state.levels.length) { // offline, but the saved list is on screen: keep it
+      stateEl.style.display = 'none';
+      $('#countLabel').textContent = $('#countLabel').textContent.replace(' · updating…', '') + ' · offline, showing the last saved list';
+      return;
+    }
     stateEl.className = 'state error';
     stateEl.innerHTML = `Couldn't load the list (${escapeHtml(errMsg(err))}). <button class="linklike" id="retryList">Retry</button>`;
     $('#countLabel').textContent = 'Failed to load';
@@ -1042,6 +1083,13 @@ function levelFilterOk(l, f) {
     default: return true;
   }
 }
+const levelTextCache = new WeakMap(); // level -> { hay, name } (lowercase), built once instead of on every keystroke
+function levelText(l) {
+  let t = levelTextCache.get(l);
+  if (!t) { t = { hay: (l.name + ' ' + (l.tags || []).join(' ') + ' ' + (l.description || '')).toLowerCase(), name: String(l.name).toLowerCase() }; levelTextCache.set(l, t); }
+  return t;
+}
+const NAME_COLLATOR = new Intl.Collator(); // same ordering as localeCompare, without re-creating a collator for every comparison
 function levelMatchesTerm(l, t, hay, nameLower) {
   if (t.text) {
     if (t.exact) { if (nameLower.trim() !== t.text) return false; }
@@ -1066,13 +1114,13 @@ function applyFilters() {
       if (excludeTags.some(t => tagsLower.includes(t))) return false;
     }
     if (!terms.length) return true;
-    const hay = (l.name + ' ' + (l.tags || []).join(' ') + ' ' + (l.description || '')).toLowerCase();
-    return terms.some(t => levelMatchesTerm(l, t, hay, String(l.name).toLowerCase()));
+    const text = levelText(l);
+    return terms.some(t => levelMatchesTerm(l, t, text.hay, text.name));
   });
   const sort = $('#sortBy').value;
   const byChosenSort = (a, b) => {
     if (sort === 'points') return (b.points || 0) - (a.points || 0);
-    if (sort === 'name') return a.name.localeCompare(b.name);
+    if (sort === 'name') return NAME_COLLATOR.compare(a.name, b.name);
     return (a.position || 0) - (b.position || 0);
   };
   list = list.slice().sort((a, b) => {
@@ -1201,7 +1249,10 @@ function renderList() {
   const sortMode = $('#sortBy').value;
   let prevStatus = null;
   let extendedShown = false;
+  const favIds = new Set(state.favourites.map(f => String(f.level_id)));
+  const followIds = new Set(state.following.map(f => String(f.level_id)));
   $('#list').innerHTML = state.filtered.map(l => {
+    const isFav = favIds.has(String(l.level_id)), isFollow = followIds.has(String(l.level_id));
     const completed = state.completedIds.has(String(l.level_id));
     const selected = isRowSelected(l.id);
     const hasPosition = l.position != null;
@@ -1216,12 +1267,12 @@ function renderList() {
       extendedShown = true;
     }
     return `${divider}
-    <div class="list-row ${completed ? 'completed' : ''} ${selected ? 'selected' : ''} ${l.status === 'Removed' ? 'removed' : ''} ${isFavourite(l.level_id) ? 'favourite' : ''} ${isFollowing(l.level_id) ? 'followed' : ''}"
+    <div class="list-row ${completed ? 'completed' : ''} ${selected ? 'selected' : ''} ${l.status === 'Removed' ? 'removed' : ''} ${isFav ? 'favourite' : ''} ${isFollow ? 'followed' : ''}"
          data-id="${l.id}" data-level-id="${l.level_id}">
       <span class="rank-mini${hasPosition ? '' : (rankLabel === '—' ? ' rank-mini-dash' : ' rank-mini-status')}">${escapeHtml(rankLabel)}</span>
       <span class="name-mini">${escapeHtml(l.name)}</span>
-      ${bellSvg('follow-mini')}
-      ${starSvg('fav-mini')}
+      ${isFollow ? bellSvg('follow-mini') : ''}
+      ${isFav ? starSvg('fav-mini') : ''}
       ${completed ? '<span class="check-mini">✓</span>' : ''}
     </div>`;
   }).join('');
@@ -1266,6 +1317,13 @@ async function setFavLabel(levelId, key) {
   catch (err) { showToast(`Couldn't save favourites: ${errMsg(err)}`); }
 }
 
+// Toggle a row's favourite / followed state live, adding its icon if the row was drawn without one.
+function setRowFlag(row, flag, on) {
+  row.classList.toggle(flag, on);
+  if (!on) return;
+  const sel = flag === 'favourite' ? '.fav-mini' : '.follow-mini';
+  if (!row.querySelector(sel)) row.insertAdjacentHTML('beforeend', flag === 'favourite' ? starSvg('fav-mini') : bellSvg('follow-mini'));
+}
 function isFavourite(levelId) {
   return state.favourites.some(f => String(f.level_id) === String(levelId));
 }
@@ -1279,7 +1337,7 @@ async function toggleFavourite(level) {
   }
   const nowFav = isFavourite(level.level_id);
   document.querySelectorAll(`.list-row[data-level-id="${CSS.escape(String(level.level_id))}"]`)
-    .forEach(r => r.classList.toggle('favourite', nowFav));
+    .forEach(r => setRowFlag(r, 'favourite', nowFav));
   renderFavourites();
   showToast(nowFav ? 'Added to favourites' : 'Removed from favourites');
   try { await window.aredl.setFavourites(state.favourites); }
@@ -1304,7 +1362,7 @@ function renderFavourites() {
       label: f.label || 'favourited',
     };
   }).sort((a, b) => {
-    if (a.position == null && b.position == null) return a.name.localeCompare(b.name);
+    if (a.position == null && b.position == null) return NAME_COLLATOR.compare(a.name, b.name);
     if (a.position == null) return 1;
     if (b.position == null) return -1;
     return a.position - b.position;
@@ -1385,7 +1443,7 @@ document.addEventListener('click', (e) => {
 async function loadFavourites() {
   try { state.favourites = await window.aredl.getFavourites(); }
   catch { state.favourites = []; }
-  document.querySelectorAll('.list-row[data-level-id]').forEach(r => r.classList.toggle('favourite', isFavourite(r.dataset.levelId)));
+  { const ids = new Set(state.favourites.map(f => String(f.level_id))); document.querySelectorAll('.list-row[data-level-id]').forEach(r => setRowFlag(r, 'favourite', ids.has(r.dataset.levelId))); }
   renderFavourites();
 }
 
@@ -1446,7 +1504,7 @@ function historyList(data) {
 
 function syncFollowButtons(levelId) {
   const on = isFollowing(levelId);
-  document.querySelectorAll(`.list-row[data-level-id="${CSS.escape(String(levelId))}"]`).forEach(r => r.classList.toggle('followed', on));
+  document.querySelectorAll(`.list-row[data-level-id="${CSS.escape(String(levelId))}"]`).forEach(r => setRowFlag(r, 'followed', on));
   document.querySelectorAll(`[data-follow-toggle="${CSS.escape(String(levelId))}"]`).forEach(b => {
     b.classList.toggle('active', on);
     b.dataset.tip = on ? 'Unfollow level' : 'Follow level';
@@ -1596,7 +1654,7 @@ function renderFollowed() {
   const rows = state.following.map(f => {
     const live = state.levels.find(l => String(l.level_id) === String(f.level_id));
     return { f, live, name: (live && live.name) || f.name || `Level ${f.level_id}`, position: live ? live.position : null, status: live ? levelStatusLabel(live) : '' };
-  }).sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9) || a.name.localeCompare(b.name));
+  }).sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9) || NAME_COLLATOR.compare(a.name, b.name));
   el.innerHTML = `<div class="follow-checked">${escapeHtml(checked)} · ${followMinutes() > 0 ? `every ${followMinutes() === 1 ? 'minute' : followMinutes() + ' minutes'}` : 'only at startup'} while the app is running</div>` + rows.map(({ f, name, position, status }) => {
     const hasPos = position != null;
     return `<div class="follow-card" data-level-id="${escapeHtml(f.level_id)}">
@@ -3002,7 +3060,7 @@ document.addEventListener('click', (e) => {
 
 function renderMultiSelection() {
   const levels = [...state.multi].map(id => state.levels.find(l => String(l.id) === id)).filter(Boolean)
-    .sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9) || a.name.localeCompare(b.name));
+    .sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9) || NAME_COLLATOR.compare(a.name, b.name));
   if (levels.length < 2) { state.multi.clear(); return; }
   const token = ++multiToken;
   multiOrder = levels;
@@ -3608,7 +3666,7 @@ function renderLevelDetail(data) {
       : '';
   }
 
-  return `<details class="debug-info"><summary>Full API response for this level</summary><div class="raw-json">${escapeHtml(JSON.stringify(data, null, 2))}</div></details>`;
+  return `${rawDetails(`Full API response for this level`, data)}`;
 }
 
 async function loadLevelDetail(level) {
@@ -3793,7 +3851,7 @@ function renderRecordsRaw() {
   const rawZone = document.getElementById('recordsRawZone');
   if (!rawZone) return;
   rawZone.innerHTML = recordsData.length
-    ? `<details class="debug-info"><summary>Full API response</summary><div class="raw-json">${escapeHtml(JSON.stringify(recordsData, null, 2))}</div></details>`
+    ? `${rawDetails(`Full API response`, recordsData)}`
     : '';
 }
 
@@ -4028,7 +4086,7 @@ async function loadChangelog(reset) {
     state.changelogLoaded = true;
     el.style.display = 'none';
     renderChangelog();
-    $('#changelogRawZone').innerHTML = `<details class="debug-info"><summary>Full API response (${changelogEntries.length.toLocaleString()} entries loaded)</summary><div class="raw-json">${escapeHtml(JSON.stringify(changelogEntries, null, 2))}</div></details>`;
+    $('#changelogRawZone').innerHTML = `${rawDetails(`Full API response (${changelogEntries.length.toLocaleString()} entries loaded)`, changelogEntries)}`;
   } catch (err) {
     el.className = 'state error';
     el.innerHTML = `Couldn't load the changelog (${escapeHtml(errMsg(err))}).`;
@@ -4217,7 +4275,7 @@ function renderHistoryTable() {
 
   const rawZone = document.getElementById('historyRawZone');
   if (rawZone) {
-    rawZone.innerHTML = `<details class="debug-info"><summary>Full API response</summary><div class="raw-json">${escapeHtml(JSON.stringify(historyRaw, null, 2))}</div></details>`;
+    rawZone.innerHTML = `${rawDetails(`Full API response`, historyRaw)}`;
   }
 }
 
@@ -4418,10 +4476,7 @@ function renderProfile(data, { isMe }) {
           </div>
           <div class="profile-search" id="profileSearchWrap"><input id="profileSearch" type="text" placeholder="Search levels" autocomplete="off"></div>
           <div id="profileTabContent"></div>
-          <details class="debug-info" style="margin-top:16px;">
-            <summary>Raw API response</summary>
-            <div class="raw-json">${escapeHtml(JSON.stringify(data, null, 2))}</div>
-          </details>
+          ${rawDetails(`Raw API response`, data, ` style="margin-top:16px;"`)}
         </div>
       </div>
     </div>`;
@@ -4776,7 +4831,7 @@ async function loadNotifications() {
     notifAll = Array.isArray(data) ? data : (data.data || data.notifications || data.items || data.results || []);
     state.notifLoaded = true;
     $('#notifRawZone').innerHTML = notifAll.length
-      ? `<details class="debug-info"><summary>Full API response</summary><div class="raw-json">${escapeHtml(JSON.stringify(data, null, 2))}</div></details>`
+      ? `${rawDetails(`Full API response`, data)}`
       : '';
     renderNotifications();
   } catch (err) {
@@ -4884,7 +4939,7 @@ async function loadSubmissions() {
     submissionsData = Array.isArray(data) ? data : (data.data || data.submissions || data.items || data.results || []);
     state.submissionsLoaded = true;
     el.style.display = 'none';
-    $('#submissionsRawZone').innerHTML = `<details class="debug-info"><summary>Full API response (${submissionsData.length.toLocaleString()} submissions)</summary><div class="raw-json">${escapeHtml(JSON.stringify(submissionsData, null, 2))}</div></details>`;
+    $('#submissionsRawZone').innerHTML = `${rawDetails(`Full API response (${submissionsData.length.toLocaleString()} submissions)`, submissionsData)}`;
     if (!submissionsData.length) {
       el.style.display = 'block';
       el.textContent = 'No submissions.';
@@ -5004,7 +5059,7 @@ function loadSubmissionBody(i, opts = {}) {
     <div class="stat"><div class="stat-label">Status</div><div class="stat-value">${escapeHtml(subStatus(item))}</div></div>
     ${updated ? `<div class="stat"><div class="stat-label">Last changed</div><div class="stat-value">${escapeHtml(new Date(updated).toLocaleString())}<br><span class="dim-inline">${escapeHtml(formatRelativeTime(new Date(updated)))}</span></div></div>` : ''}
   </div>`;
-  html += `<details class="debug-info"><summary>Full submission data</summary><div class="raw-json">${escapeHtml(JSON.stringify(item, null, 2))}</div></details>`;
+  html += `${rawDetails(`Full submission data`, item)}`;
   body.innerHTML = html;
 
   const slot = body.querySelector('.video-slot');
