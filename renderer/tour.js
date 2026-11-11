@@ -137,20 +137,32 @@
     {
       id: 'topbar',
       tab: 'settings',
+      navOptions: true, // the options under "Tabs in the top bar" only exist once it's on: show them for these steps
       when: () => !!q('#navTopWrap') && !q('#navTopWrap').hidden,
       target: '#navCard',
       side: 'left',
       title: 'Tabs in the top bar',
-      body: 'Prefer the tabs along the top? Turn on <b>Tabs in the top bar</b>. You can show full names, or just icons that expand when you hover them.',
+      body: 'Prefer the tabs along the top? Turn on <b>Tabs in the top bar</b>. You can show full names, or just icons that expand when you hover them. <i>These options normally appear once it’s on; we’re showing them for the tour.</i>',
+    },
+    {
+      id: 'menubutton',
+      tab: 'settings',
+      navOptions: true,
+      when: () => !!q('#navTopWrap') && !q('#navTopWrap').hidden,
+      target: () => { const t = q('#navMenuToggle'); return t && t.closest('.setting-line'); },
+      side: 'left',
+      title: 'The ⋯ menu button',
+      body: 'Switch on <b>Use a menu button</b> to add a small <b>⋯</b> button to the bar. Tabs you drop into it fold away into a dropdown, so the bar never gets crowded.',
     },
     {
       id: 'reorder',
       tab: 'settings',
+      navOptions: true,
       when: () => !!q('#navTopWrap') && !q('#navTopWrap').hidden,
       target: '#navReorderBtn',
       side: 'left',
       title: 'Reorder your tabs',
-      body: 'Press <b>Reorder tabs</b>, then drag tabs along the bar, to the other side, or into the <b>⋯</b> menu button (switch on <b>Use a menu button</b> first) to keep the bar tidy. Press <b>Done</b> when you’re happy.',
+      body: 'Press <b>Reorder tabs</b>, then drag tabs along the bar, to the other side, or into the <b>⋯</b> menu to keep the bar tidy. Press <b>Done</b> when you’re happy.',
     },
     {
       id: 'adaptive',
@@ -159,6 +171,12 @@
       side: 'right',
       title: 'Adaptive Glass',
       body: 'A see-through theme that picks up its colours from the level you’re looking at, so the backdrop and accent colour change as you browse. Pick it here, then fine-tune the tint in the Adaptive Glass card.',
+    },
+    {
+      id: 'more',
+      tab: 'settings',
+      title: 'Lots more to customise',
+      body: 'Settings goes much further than this tour: accent colour, corner roundness, list density, backdrop blur and brightness, how videos behave, how often things refresh, and more. Have a poke around, nothing here can break anything.',
     },
     {
       id: 'done',
@@ -268,11 +286,22 @@
   const stepOk = (s) => !(s.needsLevels && !(state.levels && state.levels.length)) && !(s.when && !s.when());
   function visibleSteps() { return STEPS.map((s, i) => i).filter(i => stepOk(STEPS[i])); }
 
+  // "Tabs in the top bar" options are hidden until that setting is on. For the steps that explain them they are
+  // revealed temporarily (the setting itself is never touched) and put back as soon as the tour moves on.
+  let navOptionsForced = false;
+  function forceNavOptions(on) {
+    const box = q('#navTopOptions');
+    if (!box) return;
+    if (on) { navOptionsForced = true; box.hidden = false; }
+    else if (navOptionsForced) { navOptionsForced = false; box.hidden = !document.body.classList.contains('nav-top'); }
+  }
+
   async function show(i) {
     const seq = ++goSeq;
     const step = STEPS[i];
     index = i;
     setText(step, i);
+    forceNavOptions(!!step.navOptions);
     if (step.tab && !q(`#tab-${step.tab}.active`)) {
       showTab(step.tab);
       await sleep(380); // the tab fades in; measure after it has settled
@@ -314,6 +343,7 @@
     const cur = STEPS[index];
     if (cur && cur.after) { try { cur.after(); } catch { /* ignore */ } }
     if (typeof hideContextMenu === 'function') hideContextMenu();
+    forceNavOptions(false);
     root.hidden = true;
     document.removeEventListener('keydown', onKey, true);
     window.removeEventListener('resize', onResize);

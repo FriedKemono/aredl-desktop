@@ -4,8 +4,8 @@
   --panel:#16161a;
   --border:#26262c;
   --text:#f2f2f4;
-  --text-dim:#8b8b93;
-  --text-faint:#57575f;
+  --text-dim:#b3b3b8;
+  --text-faint:#898993;
   --accent:#ff6f00;
   --on-accent:#1a0d00;
   --ctl-h:36px;
@@ -2000,3 +2000,92 @@ body.nav-editing .titlebar-title{display:none;}
 .tour-actions .btn[hidden],.tour-skip[hidden]{display:none;}
 .tour-card.swap .tour-text{animation:tourText .28s ease;}
 @keyframes tourText{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+
+
+/* =====================================================================
+   Readability: gray text over a bright backdrop
+   (the colours themselves are lighter now; these add a soft edge so text stays legible when the
+   backdrop is turned up, without putting any dark plate behind it)
+   ===================================================================== */
+body.custom-titlebar .titlebar .titlebar-title,
+body.custom-titlebar .titlebar .titlebar-status{color:var(--text-dim);}
+.top-nav .nav-btn:not(.active){color:var(--text-dim);}
+body.glassy:not(.adaptive) .titlebar,
+body.glassy:not(.adaptive) .app{text-shadow:0 1px 2px rgba(0,0,0,.42);}
+body.glassy:not(.adaptive) .titlebar{text-shadow:0 1px 3px rgba(0,0,0,.6);}
+body.glassy:not(.adaptive) .btn:not(.btn-ghost),
+body.glassy:not(.adaptive) .list-row.selected{text-shadow:none;}
+.list-divider{color:var(--text);opacity:.82;}
+
+/* The floating section label (MAINLIST...) sits over the scrolling rows. Instead of a dark plate behind it,
+   the rows quietly fade out underneath it, so the two can never overlap. */
+#list.has-sticky{
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,transparent 12px,#000 40px);
+          mask-image:linear-gradient(to bottom,transparent 0,transparent 12px,#000 40px);
+}
+.list-sticky-label span{color:var(--text);}
+
+/* =====================================================================
+   Corner video player: drag bar, buttons and resize corners in the app's own style
+   ===================================================================== */
+.video-dock.mini{
+  border-radius:var(--radius);border:1px solid var(--border);
+  box-shadow:0 16px 44px rgba(0,0,0,.62),0 0 0 1px color-mix(in srgb,var(--accent) 14%,transparent);
+}
+.video-dock.mini:hover,.video-dock.mini.dragging{
+  border-color:var(--accent-soft2);
+  box-shadow:0 18px 50px rgba(0,0,0,.66),0 0 0 1px var(--accent-soft2),0 0 26px var(--accent-soft);
+}
+.video-dock.mini .mp-bar{
+  height:38px;padding:0 8px 0 12px;gap:9px;
+  background:linear-gradient(to bottom,color-mix(in srgb,var(--bg2) 96%,transparent),color-mix(in srgb,var(--bg2) 72%,transparent) 62%,transparent);
+}
+.mp-grip{
+  flex:none;width:10px;height:15px;opacity:.85;
+  background:radial-gradient(circle,var(--text-dim) 1.35px,transparent 1.7px) 0 0/5px 5px;
+}
+.video-dock.mini .mp-bar:active .mp-grip,.video-dock.dragging .mp-grip{background-image:radial-gradient(circle,var(--accent) 1.35px,transparent 1.7px);}
+.mp-title{color:var(--text);text-shadow:none;font-size:12px;font-weight:700;letter-spacing:.01em;}
+.mp-btn{
+  width:26px;height:26px;color:var(--text);
+  background:color-mix(in srgb,var(--text) 9%,transparent);border:1px solid var(--border);
+  transition:background .14s,border-color .14s,color .14s,transform .12s;
+}
+.mp-btn:hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
+.mp-btn:active{transform:scale(.92);}
+.mp-btn svg{width:13px;height:13px;}
+.video-dock.mini .mp-resize{width:22px;height:22px;}
+.mp-resize::after{
+  width:13px;height:13px;border-color:var(--accent);border-width:0;filter:drop-shadow(0 0 4px var(--accent-soft2));opacity:.95;
+  transition:border-color .12s,transform .12s;
+}
+.mp-resize:hover::after{border-color:var(--text);}
+.mp-resize[data-edge="tl"]{top:38px;}
+.mp-resize[data-edge="tr"]{top:38px;}
+.mp-resize[data-edge="tl"]::after{left:5px;top:5px;border-left-width:3px;border-top-width:3px;border-top-left-radius:7px;}
+.mp-resize[data-edge="tr"]::after{right:5px;top:5px;border-right-width:3px;border-top-width:3px;border-top-right-radius:7px;}
+.mp-resize[data-edge="bl"]::after{left:5px;bottom:5px;border-left-width:3px;border-bottom-width:3px;border-bottom-left-radius:7px;}
+.mp-resize[data-edge="br"]::after{right:5px;bottom:5px;border-right-width:3px;border-bottom-width:3px;border-bottom-right-radius:7px;}
+
+/* =====================================================================
+   Packs: a normal card with the tier shown as an accent, not a coloured slab behind the text
+   ===================================================================== */
+.pack-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;}
+.pack-banner{
+  position:relative;overflow:hidden;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin:0;padding:14px 16px 14px 24px;border-radius:var(--radius);
+  background:var(--bg2);border:1px solid var(--border);
+  transition:border-color .15s,transform .15s;
+}
+.pack-banner:hover{border-color:var(--accent-soft2);transform:translateY(-1px);}
+.pack-banner::before{content:'';position:absolute;left:0;top:0;bottom:0;width:7px;background:var(--pack-bg,var(--accent));}
+.pack-banner::after{content:'';position:absolute;inset:0;background:var(--pack-bg,var(--accent));opacity:.09;pointer-events:none;}
+.pack-banner > *{position:relative;z-index:1;}
+.pack-name{min-width:0;font-weight:800;font-size:14.5px;color:var(--text);text-shadow:none;overflow:hidden;text-overflow:ellipsis;}
+.pack-tier{
+  flex:none;display:inline-flex;align-items:center;gap:7px;margin:0;padding:4px 11px;border-radius:999px;
+  font-size:11.5px;font-weight:700;color:var(--text);text-shadow:none;
+  background:color-mix(in srgb,var(--text) 7%,transparent);border:1px solid var(--border);
+}
+.pack-tier::before{content:'';width:10px;height:10px;border-radius:50%;background:var(--pack-bg,var(--accent));box-shadow:0 0 0 1px rgba(255,255,255,.28);}
+.tour-card p i{color:var(--text-faint);font-style:normal;}

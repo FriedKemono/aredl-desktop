@@ -367,15 +367,15 @@ applyRawVisibility();
 // styles.css is built on. To add one, append an entry here.
 // ---------------------------------------------------------------------------
 const THEMES = [
-  { id: 'default',  name: 'Default',  bg: '#0a0a0c', bg2: '#111114', panel: '#16161a', border: '#26262c', text: '#f2f2f4', dim: '#8b8b93', faint: '#57575f', accent: '#ff6f00', on: '#1a0d00' },
-  { id: 'amoled',   name: 'AMOLED',   bg: '#000000', bg2: '#050505', panel: '#0d0d0d', border: '#1d1d1d', text: '#f2f2f4', dim: '#8b8b93', faint: '#57575f', accent: '#ff6f00', on: '#1a0d00' },
-  { id: 'midnight', name: 'Midnight', bg: '#070a12', bg2: '#0c111c', panel: '#111827', border: '#1f2a3d', text: '#eef2ff', dim: '#8a97b3', faint: '#55617a', accent: '#3b82f6', on: '#04122e' },
-  { id: 'ocean',    name: 'Ocean',    bg: '#07100f', bg2: '#0c1716', panel: '#112120', border: '#1d3634', text: '#e9f7f5', dim: '#82a39f', faint: '#53706d', accent: '#14b8a6', on: '#021a17' },
-  { id: 'forest',   name: 'Forest',   bg: '#08100c', bg2: '#0d1712', panel: '#121e18', border: '#203429', text: '#ecf6ef', dim: '#86a393', faint: '#55705f', accent: '#22c55e', on: '#04180b' },
-  { id: 'violet',   name: 'Violet',   bg: '#0b0912', bg2: '#110e1b', panel: '#171324', border: '#2a2340', text: '#f1eefc', dim: '#9a92b8', faint: '#645c80', accent: '#a855f7', on: '#14041f' },
-  { id: 'glass',    name: 'Glass',    bg: '#090b13', bg2: '#10131d', panel: '#171b28', border: 'rgba(255,255,255,.22)', text: '#f7f8ff', dim: '#b9c2da', faint: '#8d98b4', accent: '#7dd3fc', on: '#04121c', glass: true },
+  { id: 'default',  name: 'Default',  bg: '#0a0a0c', bg2: '#111114', panel: '#16161a', border: '#26262c', text: '#f2f2f4', dim: '#b3b3b8', faint: '#898993', accent: '#ff6f00', on: '#1a0d00' },
+  { id: 'amoled',   name: 'AMOLED',   bg: '#000000', bg2: '#050505', panel: '#0d0d0d', border: '#1d1d1d', text: '#f2f2f4', dim: '#acacb2', faint: '#84848e', accent: '#ff6f00', on: '#1a0d00' },
+  { id: 'midnight', name: 'Midnight', bg: '#070a12', bg2: '#0c111c', panel: '#111827', border: '#1f2a3d', text: '#eef2ff', dim: '#aab4c8', faint: '#808ca6', accent: '#3b82f6', on: '#04122e' },
+  { id: 'ocean',    name: 'Ocean',    bg: '#07100f', bg2: '#0c1716', panel: '#112120', border: '#1d3634', text: '#e9f7f5', dim: '#a8bfbc', faint: '#739794', accent: '#14b8a6', on: '#021a17' },
+  { id: 'forest',   name: 'Forest',   bg: '#08100c', bg2: '#0d1712', panel: '#121e18', border: '#203429', text: '#ecf6ef', dim: '#a7bcb1', faint: '#749681', accent: '#22c55e', on: '#04180b' },
+  { id: 'violet',   name: 'Violet',   bg: '#0b0912', bg2: '#110e1b', panel: '#171324', border: '#2a2340', text: '#f1eefc', dim: '#b4aeca', faint: '#8d86a8', accent: '#a855f7', on: '#14041f' },
+  { id: 'glass',    name: 'Glass',    bg: '#090b13', bg2: '#10131d', panel: '#171b28', border: 'rgba(255,255,255,.22)', text: '#f7f8ff', dim: '#b9c2da', faint: '#929cb7', accent: '#7dd3fc', on: '#04121c', glass: true },
   { id: 'adaptive', name: 'Adaptive Glass', bg: '#090b13', bg2: '#10131d', panel: '#171b28', border: 'rgba(255,255,255,.22)', text: '#f7f8ff', dim: '#b9c2da', faint: '#8d98b4', accent: '#7dd3fc', on: '#0b0e16', glass: true, adaptive: true },
-  { id: 'crimson',  name: 'Crimson',  bg: '#0e0809', bg2: '#150c0e', panel: '#1b1012', border: '#33191d', text: '#f6eced', dim: '#a58b8f', faint: '#70565a', accent: '#ef4444', on: '#1f0505' },
+  { id: 'crimson',  name: 'Crimson',  bg: '#0e0809', bg2: '#150c0e', panel: '#1b1012', border: '#33191d', text: '#f6eced', dim: '#bfacaf', faint: '#9e8186', accent: '#ef4444', on: '#1f0505' },
 ];
 
 function hexToRgba(hex, alpha) {
@@ -1232,6 +1232,7 @@ function updateStickyLabel() {
   const show = cur && cur.getBoundingClientRect().bottom - lt <= 0;
   if (show) label.firstElementChild.textContent = cur.textContent;
   label.classList.toggle('show', !!show);
+  list.classList.toggle('has-sticky', !!show);
 }
 document.getElementById('list').addEventListener('scroll', () => requestAnimationFrame(updateStickyLabel), { passive: true });
 
@@ -3393,6 +3394,7 @@ class VideoDock {
     const el = this.el;
     let target = null, mode = 'off';
 
+    const leave = appSettings.videoOnLeave || 'popup'; // popup | background | pause | stop
     const slot = this.slot;
     if (slot && slot.isConnected) {
       const tab = slot.closest('.tab');
@@ -3407,14 +3409,15 @@ class VideoDock {
         const title = slot.closest('.detail-scroll') && slot.closest('.detail-scroll').querySelector('.detail-title');
         if (title) top = Math.max(top, title.getBoundingClientRect().bottom); // the sticky title covers the top
         const vis = (Math.max(0, bottom - top) * Math.max(0, right - left)) / (r.width * r.height);
-        if (vis >= 0.5) {
+        // the corner player takes over once less than half is showing; the other modes have nothing to hand over
+        // to, so the video simply stays where it is (clipped) until it has scrolled out of view
+        if (vis >= (leave === 'popup' ? 0.5 : 0.04)) {
           mode = 'inline';
           target = { left: r.left, top: r.top, width: r.width, height: r.height, clip: { top: top - r.top, right: r.right - right, bottom: r.bottom - bottom, left: left - r.left } };
         }
       }
     }
 
-    const leave = appSettings.videoOnLeave || 'popup'; // popup | background | pause | stop
     if (mode === 'inline') {
       this.leaveSince = 0;
       this.paused = false;
@@ -4405,8 +4408,8 @@ function extractOtherCompletedLevels(data) {
 
 function packBannerHtml(p) {
   const tierName = p.tier && p.tier.name;
-  const tierColor = p.tier && p.tier.color;
-  return `<div class="pack-banner" style="${tierColor ? `background:${escapeHtml(tierColor)};` : ''}">
+  const tierColor = p.tier && p.tier.color; // a colour or gradient from the API: used as an accent, never behind the text
+  return `<div class="pack-banner"${tierColor ? ` style="--pack-bg:${escapeHtml(tierColor)};"` : ''}>
     <div class="pack-name">${escapeHtml(p.name || 'Pack')}</div>
     ${tierName ? `<div class="pack-tier">${escapeHtml(tierName)}</div>` : ''}
   </div>`;
@@ -4543,7 +4546,7 @@ function renderProfileTab(which) {
     const packs = state.profilePacks || [];
     if (bannerObserver) bannerObserver.disconnect();
     $('#profileSearchWrap').hidden = true;
-    zone.innerHTML = packs.length ? packs.map(packBannerHtml).join('') : '<div class="dim">Nothing found.</div>';
+    zone.innerHTML = packs.length ? `<div class="pack-grid">${packs.map(packBannerHtml).join('')}</div>` : '<div class="dim">Nothing found.</div>';
     return;
   }
   $('#profileSearchWrap').hidden = false;
