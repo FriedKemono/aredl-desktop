@@ -146,6 +146,7 @@ function currentNavSnapshot() {
   const tab = document.querySelector('.nav-btn.active')?.dataset.tab || 'list';
   return {
     tab,
+    mode: tab === 'list' ? tabModes.list : null,
     levelId: tab === 'list' ? (state.selectedId ?? null) : null,
     range: tab === 'list' && state.multi.size >= 2 ? [...state.multi] : null,
     profile: tab === 'profile' ? (state.currentProfileId ?? null) : null,
@@ -156,6 +157,7 @@ const rangeKey = (r) => (r || []).map(String).sort().join(',');
 function sameNav(a, b) {
   if (!a || !b) return false;
   return a.tab === b.tab
+    && (a.mode ?? null) === (b.mode ?? null)
     && rangeKey(a.range) === rangeKey(b.range)
     && (a.levelId ?? null) === (b.levelId ?? null)
     && (a.profile ?? null) === (b.profile ?? null)
@@ -213,6 +215,7 @@ function restoreNav(nav) {
   restoringNavState = true;
   try {
     showTab(nav.tab);
+    if (nav.tab === 'list' && nav.mode && nav.mode !== tabModes.list) switchListMode(nav.mode); // synchronous when that list is already loaded
     if (nav.tab === 'list' && nav.range && nav.range.length >= 2 && restoreRange(nav)) {
       // level range restored (which level of it was on screen, too)
     } else if (nav.tab === 'list' && nav.levelId != null) {
@@ -285,8 +288,16 @@ document.addEventListener('click', (e) => {
 
 // Jump from a level name mentioned in the changelog/history straight to that
 // row in the Demon List tab, instead of opening a browser.
-function jumpToLevel(levelId) {
+async function jumpToLevel(levelId, hintMode) {
+  pushNavState(); // synchronously, at the start (see the note above)
+  let found = anyLevel(levelId);
+  if (!found) { // maybe it's in a list that hasn't loaded yet
+    await Promise.all(MODES.filter(m => !modeStore[m].loaded).map(ensureLevels));
+    found = anyLevel(levelId);
+  }
+  const mode = (found && found._mode) || hintMode || tabModes.list;
   showTab('list');
+  if (mode !== tabModes.list) await switchListMode(mode);
   $('#statusFilter').value = '__all__';
   $('#search').value = '';
   updateSearchClearBtn();
@@ -809,11 +820,35 @@ function wireRefreshButton(id, fn) {
     try { await fn(); } finally { setTimeout(() => btn.classList.remove('spinning'), 500); }
   });
 }
+// ---------------------------------------------------------------------------
+// Classic / Platformer
+// Two separate lists (AREDL "classic", AREPL "platformer") live in one app. Each has its own level list and
+// completions; every tab that can show either has a dropdown, and every dropdown starts on Classic.
+// state.levels / completedIds / completionField always mean "the Demon List tab's current list".
+// ---------------------------------------------------------------------------
+const MODES = ['classic', 'platformer'];
+const modeLabel = (m) => (m === 'platformer' ? 'Platformer' : 'Classic');
+const modeStore = Object.fromEntries(MODES.map(m => [m, { levels: [], completedIds: new Set(), completionField: null, loaded: false, loading: null }]));
+const tabModes = { list: 'classic', favourites: 'classic', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'classic', notifications: 'classic', changelog: 'classic', leaderboard: 'classic' };
+const levelsOf = (mode) => modeStore[mode || 'classic'].levels;
+const levelOf = (mode, levelId) => levelsOf(mode).find(l => String(l.level_id) === String(levelId));
+const anyLevel = (levelId) => levelOf('classic', levelId) || levelOf('platformer', levelId); // a level id only ever belongs to one list
+const modeOfLevel = (l) => (l && (l._mode || l.mode)) || 'classic';
+function tagMode(levels, mode) { // remember which list a level came from, without it showing up in JSON dumps
+  levels.forEach(l => Object.defineProperty(l, '_mode', { value: mode, enumerable: false, configurable: true }));
+  return levels;
+}
+
 const state = {
-  levels: [], filtered: [], openId: null,
-  signedIn: false, completedIds: new Set(), completionField: null,
+  filtered: [], openId: null,
+  signedIn: false,
   changelogLoaded: false, notifLoaded: false, submissionsLoaded: false,
 };
+Object.defineProperties(state, {
+  levels:          { get: () => modeStore[tabModes.list].levels,          set: (v) => { modeStore[tabModes.list].levels = v; } },
+  completedIds:    { get: () => modeStore[tabModes.list].completedIds,    set: (v) => { modeStore[tabModes.list].completedIds = v; } },
+  completionField: { get: () => modeStore[tabModes.list].completionField, set: (v) => { modeStore[tabModes.list].completionField = v; } },
+});
 
 // ---------------------------------------------------------------------------
 // Auth / sign-in
@@ -847,9 +882,9 @@ const KNOWN_LEVEL_FIELDS = new Set([
 // detect it: look at fields beyond the known public schema, and treat either
 // an all-boolean field, or a field that's sometimes null/sometimes not, as
 // the completion indicator.
-function extractCompletedFromLevels(levels) {
-  state.completedIds = new Set();
-  state.completionField = null;
+function extractCompleted(levels, store) {
+  store.completedIds = new Set();
+  store.completionField = null;
   if (!state.signedIn || !levels.length) return;
 
   const sample = levels.slice(0, 30);
@@ -860,8 +895,8 @@ function extractCompletedFromLevels(levels) {
   for (const key of extraKeys) {
     const values = sample.map(l => l[key]);
     if (values.every(v => typeof v === 'boolean')) {
-      state.completionField = key;
-      levels.forEach(l => { if (l[key]) state.completedIds.add(String(l.level_id)); });
+      store.completionField = key;
+      levels.forEach(l => { if (l[key]) store.completedIds.add(String(l.level_id)); });
       return;
     }
   }
@@ -870,11 +905,36 @@ function extractCompletedFromLevels(levels) {
     const hasNull = values.some(v => v === null || v === undefined);
     const hasNonNull = values.some(v => v !== null && v !== undefined);
     if (hasNull && hasNonNull) {
-      state.completionField = key;
-      levels.forEach(l => { if (l[key] != null) state.completedIds.add(String(l.level_id)); });
+      store.completionField = key;
+      levels.forEach(l => { if (l[key] != null) store.completedIds.add(String(l.level_id)); });
       return;
     }
   }
+}
+
+function extractCompletedFromLevels(levels) { extractCompleted(levels, modeStore[tabModes.list]); }
+
+function setModeLevels(mode, data) {
+  const st = modeStore[mode];
+  st.levels = tagMode(data, mode);
+  st.loaded = true;
+  extractCompleted(data, st);
+}
+// Load a list in the background (for tabs that need the other list's levels without showing it).
+function ensureLevels(mode) {
+  const st = modeStore[mode];
+  if (st.loaded) return Promise.resolve(st.levels);
+  if (!st.loading) {
+    st.loading = window.aredl.getLevels(mode)
+      .then(data => { if (Array.isArray(data) && data.length) setModeLevels(mode, data); return st.levels; })
+      .catch(() => st.levels)
+      .finally(() => { st.loading = null; });
+  }
+  return st.loading;
+}
+// After signing in or out, completions differ: refetch whichever list isn't the one on screen.
+function reloadOtherLists() {
+  MODES.filter(m => m !== tabModes.list).forEach(m => { modeStore[m].loaded = false; ensureLevels(m).then(() => { renderFavourites(); renderFollowed(); renderPersonal(); }); });
 }
 
 $('#signInBtn').addEventListener('click', async () => {
@@ -889,6 +949,7 @@ $('#signInBtn').addEventListener('click', async () => {
     $('#apiKeyInput').value = '';
     await refreshAuthStatus();
     await loadLevels(); // refetch with auth so completion fields come through
+    reloadOtherLists();
   } catch (err) {
     msg.textContent = errMsg(err) || 'Sign in failed.';
     msg.className = 'msg err';
@@ -899,6 +960,7 @@ $('#signOutBtn').addEventListener('click', async () => {
   await window.aredl.signOut();
   await refreshAuthStatus();
   await loadLevels();
+  reloadOtherLists();
 });
 
 // ---------------------------------------------------------------------------
@@ -921,14 +983,18 @@ function describeRequest(url) {
   const nameOf = (id) => { const l = state.levels.find(x => String(x.level_id) === String(id)); return l ? l.name : `level ${id}`; };
   const page = q.get('page') ? ` (page ${q.get('page')})` : '';
   let m;
-  if (/^\/aredl\/levels$/.test(p)) return 'Loaded the level list';
-  if ((m = p.match(/^\/aredl\/levels\/([^/]+)\/records$/))) return `Loaded ${nameOf(m[1])} records${page}`;
-  if ((m = p.match(/^\/aredl\/levels\/([^/]+)\/history$/))) return `Loaded ${nameOf(m[1])} position history`;
-  if ((m = p.match(/^\/aredl\/levels\/([^/]+)$/))) return `Loaded ${nameOf(m[1])}`;
-  if (/^\/aredl\/changelog$/.test(p)) return `Loaded the changelog${page}`;
-  if (/^\/aredl\/submissions\/@me$/.test(p)) return 'Loaded your submissions';
-  if (/^\/aredl\/submissions\/[^/]+\/queue$/.test(p)) return 'Loaded a submission’s queue position';
-  if (/^\/aredl\/profile\//.test(p)) return 'Loaded a profile';
+  const list = /^\/arepl\//.test(p) ? 'platformer ' : '';
+  if (/^\/(?:aredl|arepl)\/levels$/.test(p)) return `Loaded the ${list}level list`;
+  if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/records$/))) return `Loaded ${nameOf(m[1])} records${page}`;
+  if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/history$/))) return `Loaded ${nameOf(m[1])} position history`;
+  if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)$/))) return `Loaded ${nameOf(m[1])}`;
+  if (/^\/(?:aredl|arepl)\/changelog$/.test(p)) return `Loaded the ${list}changelog${page}`;
+  if (/^\/(?:aredl|arepl)\/leaderboard\/countries$/.test(p)) return `Loaded the ${list}countries leaderboard${page}`;
+  if (/^\/(?:aredl|arepl)\/leaderboard$/.test(p)) return `Loaded the ${list}leaderboard${page}`;
+  if (/^\/(?:aredl|arepl)\/country\//.test(p)) return `Loaded a ${list}country`;
+  if (/^\/(?:aredl|arepl)\/submissions\/@me$/.test(p)) return 'Loaded your submissions';
+  if (/^\/(?:aredl|arepl)\/submissions\/[^/]+\/queue$/.test(p)) return 'Loaded a submission’s queue position';
+  if (/^\/(?:aredl|arepl)\/profile\//.test(p)) return 'Loaded a profile';
   if (/notifications/.test(p)) return 'Loaded your notifications';
   if (/@me/.test(p)) return 'Checked your account';
   return `Loaded ${p || '/'}`;
@@ -977,6 +1043,7 @@ function tierBadgeHtml(tier) {
 }
 
 async function loadLevels() {
+  const mode = tabModes.list;
   const stateEl = $('#listState');
   stateEl.style.display = 'block';
   stateEl.className = 'state';
@@ -984,14 +1051,14 @@ async function loadLevels() {
   $('#countLabel').textContent = 'Loading…';
   let liveDone = false;
   try {
-    const live = window.aredl.getLevels(); // start the real request first...
+    const live = window.aredl.getLevels(mode); // start the real request first...
     if (!state.levels.length && window.aredl.getCachedLevels) {
       // ...and meanwhile show the list saved last time, so the app is usable straight away
-      window.aredl.getCachedLevels().then(saved => {
-        if (liveDone || !Array.isArray(saved) || !saved.length) return;
-        state.levels = saved;
-        extractCompletedFromLevels(saved);
+      window.aredl.getCachedLevels(mode).then(saved => {
+        if (liveDone || mode !== tabModes.list || !Array.isArray(saved) || !saved.length) return;
+        setModeLevels(mode, saved);
         populateStatusFilter(saved);
+        renderTagFilterPanel();
         applyFilters();
         $('#countLabel').textContent += ' · updating…';
       }).catch(() => {});
@@ -999,13 +1066,15 @@ async function loadLevels() {
     const data = await live;
     liveDone = true;
     if (!Array.isArray(data) || !data.length) throw new Error('Empty response');
-    state.levels = data;
-    extractCompletedFromLevels(data);
+    setModeLevels(mode, data);
+    if (mode !== tabModes.list) return; // you switched lists while this loaded: it's stored, nothing to draw
     populateStatusFilter(data);
+    renderTagFilterPanel();
     applyFilters();
     $('#listRawZone').innerHTML = `${rawDetails(`Full API response (${data.length.toLocaleString()} levels)`, data)}`;
   } catch (err) {
     liveDone = true;
+    if (mode !== tabModes.list) return;
     if (state.levels.length) { // offline, but the saved list is on screen: keep it
       stateEl.style.display = 'none';
       $('#countLabel').textContent = $('#countLabel').textContent.replace(' · updating…', '') + ' · offline, showing the last saved list';
@@ -1017,6 +1086,36 @@ async function loadLevels() {
     document.getElementById('retryList')?.addEventListener('click', loadLevels);
   }
 }
+
+// Switch the Demon List tab between the classic and platformer lists.
+async function switchListMode(mode) {
+  if (!MODES.includes(mode)) return;
+  $('#listMode').value = mode;
+  if (mode === tabModes.list) return;
+  abortRecords();
+  tabModes.list = mode;
+  // nothing from the other list stays selected
+  state.selectedId = null; state.detailLoaded = null; state.multiShownId = null; state.multiViewId = null;
+  state.multi.clear();
+  multiRecordsCache.clear(); multiHistoryCache.clear();
+  state.tagFilters = {}; updateTagFilterCount();
+  $('#recordsCol').hidden = true;
+  $('#detailInner').innerHTML = '<div class="detail-placeholder">Select a level on the left to see its details.</div>';
+  markRangeCards();
+  const st = modeStore[mode];
+  if (st.loaded && st.levels.length) {
+    populateStatusFilter(st.levels);
+    renderTagFilterPanel();
+    applyFilters();
+    $('#listRawZone').innerHTML = '';
+    $('#listState').style.display = 'none';
+  } else {
+    $('#listLayout').hidden = true;
+    await loadLevels();
+  }
+  pushNavState();
+}
+$('#listMode').addEventListener('change', () => switchListMode($('#listMode').value));
 
 function populateStatusFilter(data) {
   const statuses = [...new Set(data.map(l => l.status).filter(Boolean))];
@@ -1163,8 +1262,17 @@ const ALL_TAGS = [
 ];
 state.tagFilters = {}; // lowercase tag -> 'include' | 'exclude'
 
+// Classic shows the full known tag set; another list shows the tags its levels actually have.
+function panelTags() {
+  const present = new Map();
+  state.levels.forEach(l => (l.tags || []).forEach(t => { const k = String(t).toLowerCase(); if (!present.has(k)) present.set(k, String(t)); }));
+  const known = new Set(ALL_TAGS.map(t => t.toLowerCase()));
+  const out = ALL_TAGS.filter(t => tabModes.list === 'classic' || present.has(t.toLowerCase()));
+  [...present.entries()].filter(([k]) => !known.has(k)).sort(([a], [b]) => a.localeCompare(b)).forEach(([, label]) => out.push(label));
+  return out.length ? out : ALL_TAGS;
+}
 function renderTagFilterPanel() {
-  $('#tagFilterPills').innerHTML = ALL_TAGS.map(t => {
+  $('#tagFilterPills').innerHTML = panelTags().map(t => {
     const key = t.toLowerCase();
     const mode = state.tagFilters[key] || '';
     return `<span class="tag-pill ${mode}" data-tag="${escapeHtml(key)}">${escapeHtml(t)}</span>`;
@@ -1335,7 +1443,7 @@ async function toggleFavourite(level) {
   if (isFavourite(level.level_id)) {
     state.favourites = state.favourites.filter(f => String(f.level_id) !== String(level.level_id));
   } else {
-    state.favourites = [...state.favourites, { level_id: level.level_id, name: level.name, label: 'favourited' }];
+    state.favourites = [...state.favourites, { level_id: level.level_id, name: level.name, label: 'favourited', mode: modeOfLevel(level) }];
   }
   const nowFav = isFavourite(level.level_id);
   document.querySelectorAll(`.list-row[data-level-id="${CSS.escape(String(level.level_id))}"]`)
@@ -1349,13 +1457,15 @@ async function toggleFavourite(level) {
 function renderFavourites() {
   const el = document.getElementById('favList');
   if (!el) return;
-  $('#favCount').textContent = state.favourites.length ? `(${state.favourites.length})` : '';
-  if (!state.favourites.length) {
-    el.innerHTML = '<div class="state">No favourites yet.</div>';
+  const mode = tabModes.favourites;
+  const mine = state.favourites.filter(f => (f.mode || 'classic') === mode);
+  $('#favCount').textContent = mine.length ? `(${mine.length})` : '';
+  if (!mine.length) {
+    el.innerHTML = `<div class="state">No ${mode === 'platformer' ? 'platformer ' : ''}favourites yet.</div>`;
     return;
   }
-  const rows = state.favourites.map(f => {
-    const live = state.levels.find(l => String(l.level_id) === String(f.level_id));
+  const rows = mine.map(f => {
+    const live = levelOf(mode, f.level_id);
     return {
       level_id: f.level_id,
       name: (live && live.name) || f.name || `Level ${f.level_id}`,
@@ -1401,7 +1511,7 @@ function renderFavourites() {
 
   // Sorting by list or category groups the cards under coloured headers.
   const sortMode = appSettings.favSort || 'category';
-  const isDone = (r) => state.completedIds.has(String(r.level_id));
+  const isDone = (r) => modeStore[mode].completedIds.has(String(r.level_id));
   const groupBy = (keyOf, nameOf, colorOf, order) => {
     const by = new Map();
     rows.forEach(r => { const k = keyOf(r); if (!by.has(k)) by.set(k, []); by.get(k).push(r); });
@@ -1439,7 +1549,7 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-fav-remove]');
   if (!btn) return;
   const f = state.favourites.find(x => String(x.level_id) === btn.dataset.favRemove);
-  toggleFavourite(state.levels.find(l => String(l.level_id) === btn.dataset.favRemove) || f || { level_id: btn.dataset.favRemove, name: '' });
+  toggleFavourite(anyLevel(btn.dataset.favRemove) || f || { level_id: btn.dataset.favRemove, name: '' });
 });
 
 async function loadFavourites() {
@@ -1528,12 +1638,12 @@ async function toggleFollow(level) {
   // history entry that already exists.
   let newest = null;
   try {
-    const list = historyList(await window.aredl.getLevelHistory(level.level_id));
+    const list = historyList(await window.aredl.getLevelHistory(level.level_id, modeOfLevel(level)));
     list.forEach(e => { const d = entryDate(e); if (d && (!newest || d > newest)) newest = d; });
   } catch { /* fall back to "now" below */ }
   const baseline = (newest || new Date()).toISOString();
   state.following = [...state.following, {
-    level_id: level.level_id, name: level.name, notify: { ...FOLLOW_DEFAULTS },
+    level_id: level.level_id, name: level.name, mode: modeOfLevel(level), notify: { ...FOLLOW_DEFAULTS },
     lastSeenAt: baseline, lastChange: newest ? newest.toISOString() : null,
   }];
   await saveFollowing();
@@ -1597,7 +1707,7 @@ async function checkFollowed({ manual = false } = {}) {
       const wanted = Object.values(f.notify || {}).some(Boolean);
       if (!wanted) continue;
       try {
-        const list = historyList(await window.aredl.getLevelHistory(f.level_id));
+        const list = historyList(await window.aredl.getLevelHistory(f.level_id, f.mode || 'classic'));
         const since = f.lastSeenAt ? new Date(f.lastSeenAt) : new Date(0);
         const fresh = list.map(e => ({ e, d: entryDate(e) })).filter(x => x.d && x.d > since).sort((a, b) => a.d - b.d);
         for (const { e, d } of fresh) {
@@ -1606,7 +1716,7 @@ async function checkFollowed({ manual = false } = {}) {
             const cause = e.cause && typeof e.cause === 'object' ? (e.cause.level_id ?? e.cause.id ?? '') : '';
             const id = `${f.level_id}|${d.toISOString()}|${actionTypeOf(e)}|${cause}`;
             if (!followNotifs.some(n => n.id === id)) {
-              followNotifs.unshift({ id, level_id: f.level_id, level_name: f.name, category: cat, text: followText(e), at: d.toISOString() });
+              followNotifs.unshift({ id, level_id: f.level_id, mode: f.mode || 'classic', level_name: f.name, category: cat, text: followText(e), at: d.toISOString() });
               added++;
             }
           }
@@ -1647,14 +1757,16 @@ async function startFollowing() {
 function renderFollowed() {
   const el = document.getElementById('followList');
   if (!el) return;
-  $('#followCount').textContent = state.following.length ? `(${state.following.length})` : '';
-  if (!state.following.length) {
-    el.innerHTML = '<div class="state">You\'re not following any levels yet.</div>';
+  const mode = tabModes.followed;
+  const mine = state.following.filter(f => (f.mode || 'classic') === mode);
+  $('#followCount').textContent = mine.length ? `(${mine.length})` : '';
+  if (!mine.length) {
+    el.innerHTML = `<div class="state">You're not following any ${mode === 'platformer' ? 'platformer ' : ''}levels yet.</div>`;
     return;
   }
   const checked = followLastChecked ? `Last checked ${formatRelativeTime(followLastChecked)}` : 'Checking…';
-  const rows = state.following.map(f => {
-    const live = state.levels.find(l => String(l.level_id) === String(f.level_id));
+  const rows = mine.map(f => {
+    const live = levelOf(mode, f.level_id);
     return { f, live, name: (live && live.name) || f.name || `Level ${f.level_id}`, position: live ? live.position : null, status: live ? levelStatusLabel(live) : '' };
   }).sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9) || NAME_COLLATOR.compare(a.name, b.name));
   el.innerHTML = `<div class="follow-checked">${escapeHtml(checked)} · ${followMinutes() > 0 ? `every ${followMinutes() === 1 ? 'minute' : followMinutes() + ' minutes'}` : 'only at startup'} while the app is running</div>` + rows.map(({ f, name, position, status }) => {
@@ -1664,7 +1776,7 @@ function renderFollowed() {
         <span class="fav-card-rank${hasPos ? '' : ' status'}">${escapeHtml(hasPos ? `#${position}` : (status || '—'))}</span>
         <a href="#" class="follow-name" data-jump="${escapeHtml(f.level_id)}">${escapeHtml(name)}</a>
         <span class="follow-actions">
-          ${levelToolsHtml({ level_id: f.level_id, name })}
+          ${levelToolsHtml({ level_id: f.level_id, name, mode: f.mode || 'classic' })}
           <button class="icon-tool follow-btn active" data-tip="Unfollow level" data-follow-toggle="${escapeHtml(f.level_id)}" aria-label="Unfollow level"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8a4.5 4.5 0 0 1 9 0c0 4 1.5 5 1.5 5H4s1.5-1 1.5-5Z"/><path d="M8.5 16a1.7 1.7 0 0 0 3 0"/></svg></button>
         </span>
       </div>
@@ -1680,7 +1792,7 @@ document.addEventListener('click', async (e) => {
   const tog = e.target.closest('[data-follow-toggle]');
   if (tog) {
     const id = tog.dataset.followToggle;
-    const level = state.levels.find(l => String(l.level_id) === id) || (state.following.find(f => String(f.level_id) === id)) || { level_id: id, name: '' };
+    const level = anyLevel(id) || (state.following.find(f => String(f.level_id) === id)) || { level_id: id, name: '' };
     toggleFollow(level);
     return;
   }
@@ -1720,7 +1832,10 @@ async function savePersonal() {
   catch (err) { showToast(`Couldn't save: ${errMsg(err)}`); return false; }
 }
 
-const plLive = (e) => state.levels.find(l => String(l.level_id) === String(e.level_id));
+const plLive = (e) => levelOf(e.mode || 'classic', e.level_id);
+// the entries belonging to the list shown in this tab (classic / platformer)
+const plEntries = () => personalList.filter(e => (e.mode || 'classic') === tabModes.personal);
+let plMode = 'classic'; // which list the open Add / Edit window is for
 const plSnap = (l) => ({ name: l.name, level_id: l.level_id, position: l.position ?? null, gddl_tier: l.gddl_tier ?? null, status: l.status || null, points: l.points ?? null });
 
 // A run is "53-79" (from 53% to 79%), or just "79" / "100" (from the start). 20-100 is a completion
@@ -1779,7 +1894,7 @@ const plFmtDate = (iso) => { const d = plDate(iso); return d ? `${String(d.getDa
 const plDaysSince = (iso) => { const d = plDate(iso); return d ? Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000)) : null; };
 
 function plSorted() {
-  const rows = personalList.filter(plIsDone).map(e => ({ e, r: plResolve(e) }));
+  const rows = plEntries().filter(plIsDone).map(e => ({ e, r: plResolve(e) }));
   const byTier = (a, b) => (b.r.tier ?? -1) - (a.r.tier ?? -1) || a.r.name.localeCompare(b.r.name);
   // "#" is always the rank by tier, whatever the display order
   const ranked = rows.slice().sort(byTier);
@@ -1826,7 +1941,7 @@ function plRunsNeeded(entries) {
 }
 const plRunSize = (e) => Number(e.percent) - (plStartOf(e) ?? 0); // 50-90 is a 40% run, a plain 39 is 39%
 function plProgressRows() {
-  const rows = personalList.filter(e => !plIsDone(e)).map(e => ({ e, r: plResolve(e) }));
+  const rows = plEntries().filter(e => !plIsDone(e)).map(e => ({ e, r: plResolve(e) }));
   const byName = (a, b) => a.r.name.localeCompare(b.r.name);
   const sorters = {
     run: (a, b) => plRunSize(b.e) - plRunSize(a.e) || Number(b.e.percent) - Number(a.e.percent),
@@ -1886,11 +2001,11 @@ function renderPersonal() {
   const done = plSorted();
   const progress = plProgressRows();
   const totalPts = done.reduce((sum, x) => sum + (x.r.pointsNum || 0), 0);
-  $('#plCount').textContent = personalList.length
+  $('#plCount').textContent = plEntries().length
     ? `(${done.length}${totalPts ? ` · ${totalPts.toLocaleString(undefined, { maximumFractionDigits: 2 })} pts` : ''})`
     : '';
-  if (!personalList.length) {
-    el.innerHTML = '<div class="state">Nothing here yet. Press <b>+ Add level</b> to start your list.</div>';
+  if (!plEntries().length) {
+    el.innerHTML = `<div class="state">Nothing in your ${tabModes.personal === 'platformer' ? 'platformer ' : ''}list yet. Press <b>+ Add level</b> to start it.</div>`;
     $('#plProgressWrap').hidden = true;
     return;
   }
@@ -2151,8 +2266,13 @@ function plRenderChosen() {
 function plRenderResults() {
   const box = $('#plLevelResults');
   const q = $('#plLevelSearch').value.trim().toLowerCase();
-  if (!state.levels.length) { box.innerHTML = '<div class="dim" style="padding:10px;">The level list hasn\'t loaded yet.</div>'; box.hidden = false; return; }
-  const list = (q ? state.levels.filter(l => (l.name || '').toLowerCase().includes(q) || String(l.level_id).includes(q)) : state.levels).slice(0, 8);
+  const pool = levelsOf(plMode);
+  if (!pool.length) {
+    box.innerHTML = '<div class="dim" style="padding:10px;">The level list hasn\'t loaded yet.</div>'; box.hidden = false;
+    ensureLevels(plMode).then(() => { if (levelsOf(plMode).length) plRenderResults(); }); // try again once it arrives
+    return;
+  }
+  const list = (q ? pool.filter(l => (l.name || '').toLowerCase().includes(q) || String(l.level_id).includes(q)) : pool).slice(0, 8);
   box.innerHTML = list.length
     ? list.map(l => `<button type="button" class="pl-result" data-pl-pick="${escapeHtml(String(l.level_id))}"><span class="pos">${l.position != null ? `#${l.position}` : '—'}</span><span class="nm">${escapeHtml(l.name)}</span><span class="id">${escapeHtml(String(l.level_id))}</span></button>`).join('')
     : '<div class="dim" style="padding:10px;">No level matches that.</div>';
@@ -2169,7 +2289,9 @@ function plPick(l) {
 function plOpen(entry) {
   plEditingId = entry ? entry.id : null;
   plDeleteArmed = false;
-  $('#plModalTitle').textContent = entry ? 'Edit entry' : 'Add level';
+  plMode = entry ? (entry.mode || 'classic') : tabModes.personal;
+  $('#plModalTitle').textContent = `${entry ? 'Edit entry' : 'Add level'}${plMode === 'platformer' ? ' · Platformer' : ''}`;
+  if (!levelsOf(plMode).length) ensureLevels(plMode);
   const del = $('#plDelete');
   del.hidden = !entry;
   del.textContent = 'Delete';
@@ -2220,6 +2342,7 @@ async function plSave() {
   const num = (v) => (v === '' || v == null || Number.isNaN(Number(v)) ? null : Number(v));
   const entry = {
     id: plEditingId || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)),
+    mode: plMode,
     level_id: plPicked?.level_id ?? (manual.id || null),
     snap: plPicked ? plSnap(plPicked) : { name: manual.name },
     auto, manual,
@@ -2258,7 +2381,7 @@ function plCsv() {
 }
 
 $('#plAddBtn').addEventListener('click', async () => { await loadPersonal(); plOpen(null); });
-$('#plCopyBtn').addEventListener('click', () => { if (!personalList.length) { showToast('Nothing to copy yet'); return; } copyText(plCsv(), 'List as CSV'); });
+$('#plCopyBtn').addEventListener('click', () => { if (!plEntries().length) { showToast('Nothing to copy yet'); return; } copyText(plCsv(), 'List as CSV'); });
 $('#plSort').addEventListener('change', () => { setSetting('plSort', $('#plSort').value); renderPersonal(); });
 $('#plProgressSort').addEventListener('change', () => { setSetting('plProgressSort', $('#plProgressSort').value); renderPersonal(); });
 $('#plModalClose').addEventListener('click', plClose);
@@ -2276,7 +2399,7 @@ $('#plLevelSearch').addEventListener('focus', plRenderResults);
 $('#plLevelResults').addEventListener('click', (e) => {
   const b = e.target.closest('[data-pl-pick]');
   if (!b) return;
-  const l = state.levels.find(x => String(x.level_id) === b.dataset.plPick);
+  const l = levelOf(plMode, b.dataset.plPick);
   if (l) plPick(l);
 });
 PL_AUTO.forEach(([K]) => plInput('Auto' + K).addEventListener('change', plSyncAuto));
@@ -2318,14 +2441,16 @@ plBindTable($('#plProgress'));
 // ---------------------------------------------------------------------------
 // Leaderboard (/aredl/leaderboard) - one page at a time, 50 players per page
 // ---------------------------------------------------------------------------
-const lbState = { page: 1, data: null, loading: false, error: null };
+const lbState = { page: 1, data: null, loading: false, error: null, board: 'players' }; // board: players | countries
 
 async function loadLeaderboard(page = lbState.page) {
   lbState.loading = true;
   lbState.error = null;
   renderLeaderboard();
   try {
-    lbState.data = await window.aredl.getLeaderboard(page);
+    lbState.data = lbState.board === 'countries'
+      ? await window.aredl.getCountries(page, tabModes.leaderboard)
+      : await window.aredl.getLeaderboard(page, tabModes.leaderboard);
     lbState.page = page;
   } catch (err) {
     lbState.error = errMsg(err);
@@ -2340,6 +2465,7 @@ function renderLeaderboard() {
   if (lbState.loading && !d) { table.innerHTML = '<div class="state"><div class="spinner"></div>Loading…</div>'; return; }
   if (lbState.error && !d) { table.innerHTML = `<div class="state error">Couldn't load the leaderboard (${escapeHtml(lbState.error)}).</div>`; return; }
   if (!d) return;
+  if (lbState.board === 'countries') return renderCountriesBoard(d);
   const all = Array.isArray(d) ? d : (d.data || d.items || []);
   const q = ($('#lbSearch').value || '').trim().toLowerCase();
   const rows = q ? all.filter(r => (personName(r.user) || '').toLowerCase().includes(q) || String(r.user && r.user.username || '').toLowerCase().includes(q)) : all;
@@ -2361,7 +2487,7 @@ function renderLeaderboard() {
       <span class="lb-rank"><b class="rank-badge">${rank || '—'}</b></span>
       <span class="lb-player">
         ${av ? `<img class="lb-avatar" src="${escapeHtml(av)}" alt="" loading="lazy">` : '<span class="lb-avatar ph"></span>'}
-        <span class="lb-flag">${countryFlagHtml(r.country ?? u.country, 18)}</span>
+        <span class="lb-flag">${flagLinkHtml(r.country ?? u.country, 18)}</span>
         <a href="#" class="level-link" data-lookup-publisher="${escapeHtml(String(u.id || ''))}">${escapeHtml(personName(u) || 'Unknown')}</a>
       </span>
       <span class="lb-num strong">${escapeHtml(formatPoints(r.total_points))}</span>
@@ -2379,6 +2505,11 @@ function renderLeaderboard() {
   }).join('');
   table.innerHTML = `<div class="lb-row lb-head">${head.map(t => `<span>${t}</span>`).join('')}</div>${body || '<div class="state">No players match.</div>'}`;
 
+  renderLbPager(pages, per);
+}
+
+// First / previous / page box / next / last - shared by the players and countries boards.
+function renderLbPager(pages, per) {
   const p = lbState.page;
   $('#lbPager').innerHTML = pages > 1
     ? `<button class="btn btn-ghost" data-lb-page="1" ${p <= 1 ? 'disabled' : ''} title="First page" aria-label="First page">«</button>
@@ -2391,6 +2522,49 @@ function renderLeaderboard() {
        <button class="btn btn-ghost" data-lb-page="${pages}" ${p >= pages ? 'disabled' : ''} title="Last page" aria-label="Last page">»</button>`
     : '';
   lbState.pages = pages;
+}
+
+// A flag that opens that country's page.
+function flagLinkHtml(code, size) {
+  const flag = countryFlagHtml(code, size);
+  if (code == null || code === '' || code === 0 || code === '0' || !flag) return flag;
+  return `<a href="#" class="flag-link" data-country="${escapeHtml(String(code))}" title="Open this country">${flag}</a>`;
+}
+
+// The countries board (/leaderboard/countries). Its columns come from the numbers each row carries.
+const COUNTRY_SKIP_KEYS = new Set(['rank', 'country', 'country_code', 'id', 'name', 'country_name', 'position']);
+function renderCountriesBoard(d) {
+  const table = $('#lbTable');
+  const all = Array.isArray(d) ? d : (d.data || d.items || d.countries || []);
+  const q = ($('#lbSearch').value || '').trim().toLowerCase();
+  const codeOf = (r) => r.country ?? r.country_code ?? r.id ?? null;
+  const nameOf = (r) => r.name || r.country_name || countryName(codeOf(r)) || (codeOf(r) != null ? `Country ${codeOf(r)}` : '—');
+  const rows = q ? all.filter(r => nameOf(r).toLowerCase().includes(q)) : all;
+  const pages = d.pages || 1, per = d.per_page || all.length || 50;
+  $('#lbCount').textContent = `(${Number(d.count ?? all.length).toLocaleString()} countries)`;
+  $('#lbInfo').textContent = pages > 1 ? `Page ${lbState.page} of ${pages}` : '';
+  // numeric columns, taken from the first row that has them
+  const sample = all.find(r => r && typeof r === 'object') || {};
+  const cols = Object.entries(sample).filter(([k, v]) => typeof v === 'number' && !COUNTRY_SKIP_KEYS.has(k)).map(([k]) => k).slice(0, 6);
+  const grid = `grid-template-columns:72px minmax(220px,1.6fr) repeat(${Math.max(cols.length, 1)}, minmax(110px,1fr));`;
+  // points are stored in tenths (like the players board); counts such as players or extremes are shown as they are
+  const numCell = (k, v) => (/point/i.test(k) ? formatPoints(v) : Number(v).toLocaleString());
+  const head = ['#', 'Country', ...cols.map(humanizeKey)];
+  const body = rows.map((r, i) => {
+    const rank = r.rank ?? ((lbState.page - 1) * per + i + 1);
+    const cls = rank === 1 ? ' rank1' : rank === 2 ? ' rank2' : rank === 3 ? ' rank3' : '';
+    const code = codeOf(r);
+    return `<div class="lb-row${cls}" style="${grid}">
+      <span class="lb-rank"><b class="rank-badge">${escapeHtml(String(rank))}</b></span>
+      <span class="lb-player">
+        <span class="lb-flag">${countryFlagHtml(code, 22)}</span>
+        <a href="#" class="level-link" data-country="${escapeHtml(String(code))}">${escapeHtml(nameOf(r))}</a>
+      </span>
+      ${cols.map((k, ci) => `<span class="lb-num${ci === 0 ? ' strong' : ' dim'}">${escapeHtml(numCell(k, r[k]))}</span>`).join('')}
+    </div>`;
+  }).join('');
+  table.innerHTML = `<div class="lb-row lb-head" style="${grid}">${head.map(t => `<span>${escapeHtml(t)}</span>`).join('')}</div>${body || '<div class="state">No countries match.</div>'}`;
+  renderLbPager(pages, per);
 }
 $('#lbSearch').addEventListener('input', renderLeaderboard);
 $('#lbRefreshBtn').addEventListener('click', () => loadLeaderboard(lbState.page));
@@ -2417,12 +2591,14 @@ function lbGoToTyped() {
 // a divider line. To give a different kind of thing its own menu, build an
 // items array the same way and call showContextMenu(x, y, items).
 // ---------------------------------------------------------------------------
+// Where a level lives on the website. (Platformer levels are on the platformer side of the site - change here if that path moves.)
+const levelWebUrl = (id, mode) => (mode === 'platformer' ? `https://aredl.net/platformer/list/${id}` : `https://aredl.net/list/${id}`);
 function levelMenuItems(level) {
   const fav = isFavourite(level.level_id);
   return [
-    { label: 'Copy AREDL link', onClick: () => copyText(`https://aredl.net/list/${level.level_id}`, 'AREDL link') },
+    { label: 'Copy AREDL link', onClick: () => copyText(levelWebUrl(level.level_id, modeOfLevel(level)), 'AREDL link') },
     { label: 'Copy level ID', onClick: () => copyText(level.level_id, 'Level ID') },
-    { label: 'Open in AREDL', onClick: () => window.open(`https://aredl.net/list/${level.level_id}`, '_blank', 'noopener') },
+    { label: 'Open in AREDL', onClick: () => window.open(levelWebUrl(level.level_id, modeOfLevel(level)), '_blank', 'noopener') },
     { label: 'Search on YouTube', onClick: () => window.open(youtubeSearchUrl(level.name), '_blank', 'noopener') },
     { separator: true },
     { label: fav ? 'Remove from favourites' : 'Add to favourites', onClick: () => toggleFavourite(level) },
@@ -2482,11 +2658,12 @@ function showContextMenu(x, y, items) {
 document.addEventListener('contextmenu', (e) => {
   const row = e.target.closest('.list-row, .fav-card, .follow-card');
   if (!row) { hideContextMenu(); return; }
-  const level = state.levels.find(l => String(l.level_id) === String(row.dataset.levelId));
+  const level = anyLevel(row.dataset.levelId);
   const levelId = row.dataset.levelId;
   e.preventDefault();
   // Favourites can still be managed before/without the full list being loaded.
-  const target = level || { level_id: levelId, name: (state.favourites.find(f => String(f.level_id) === String(levelId)) || {}).name || '' };
+  const saved = state.favourites.find(f => String(f.level_id) === String(levelId)) || state.following.find(f => String(f.level_id) === String(levelId)) || {};
+  const target = level || { level_id: levelId, name: saved.name || '', mode: saved.mode || 'classic' };
   showContextMenu(e.clientX, e.clientY, levelMenuItems(target));
 });
 document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctxMenu')) hideContextMenu(); });
@@ -2514,9 +2691,18 @@ document.addEventListener('click', (e) => {
   const link = e.target.closest('[data-lookup-publisher]');
   if (link) {
     e.preventDefault();
+    const from = link.closest('#tab-list') ? tabModes.list : link.closest('#tab-leaderboard') ? tabModes.leaderboard : null;
+    if (from) setProfileMode(from);
     showTab('profile');
     $('#profileLookup').value = link.dataset.lookupPublisher;
     lookupProfile(link.dataset.lookupPublisher);
+  }
+  const country = e.target.closest('[data-country]'); // a flag or country name: open that country in the profile
+  if (country) {
+    e.preventDefault();
+    const from = country.closest('#tab-leaderboard') ? tabModes.leaderboard : null;
+    if (from) setProfileMode(from);
+    openCountry(country.dataset.country);
   }
 });
 
@@ -2735,14 +2921,14 @@ function levelToolsHtml(level, { follow = false } = {}) {
     : '';
   return `<span class="title-tools">
     ${followBtn}
-    ${id != null ? `<button class="icon-tool" data-tip="Copy AREDL link" data-copy-aredl="${escapeHtml(String(id))}" aria-label="Copy AREDL link">${icon('<path d="M8.5 11.5a3.2 3.2 0 0 0 4.5 0l2.6-2.6a3.2 3.2 0 0 0-4.5-4.5l-.9.9"/><path d="M11.5 8.5a3.2 3.2 0 0 0-4.5 0l-2.6 2.6a3.2 3.2 0 0 0 4.5 4.5l.9-.9"/>')}</button>
-    <a class="icon-tool" data-tip="Open in AREDL" href="https://aredl.net/list/${escapeHtml(String(id))}" target="_blank" rel="noopener" aria-label="Open in AREDL">${icon('<path d="M11 4h5v5"/><path d="M16 4l-7 7"/><path d="M14 11.5V15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5"/>')}</a>` : ''}
+    ${id != null ? `<button class="icon-tool" data-tip="Copy AREDL link" data-copy-aredl="${escapeHtml(String(id))}" data-copy-mode="${modeOfLevel(level)}" aria-label="Copy AREDL link">${icon('<path d="M8.5 11.5a3.2 3.2 0 0 0 4.5 0l2.6-2.6a3.2 3.2 0 0 0-4.5-4.5l-.9.9"/><path d="M11.5 8.5a3.2 3.2 0 0 0-4.5 0l-2.6 2.6a3.2 3.2 0 0 0 4.5 4.5l.9-.9"/>')}</button>
+    <a class="icon-tool" data-tip="Open in AREDL" href="${escapeHtml(levelWebUrl(id, modeOfLevel(level)))}" target="_blank" rel="noopener" aria-label="Open in AREDL">${icon('<path d="M11 4h5v5"/><path d="M16 4l-7 7"/><path d="M14 11.5V15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5"/>')}</a>` : ''}
     <a class="icon-tool" data-tip="Search on YouTube" href="${escapeHtml(yt)}" target="_blank" rel="noopener" aria-label="Search on YouTube">${icon('<rect x="2.5" y="5" width="15" height="10" rx="3"/><path d="M8.5 7.8v4.4l3.8-2.2z" fill="currentColor"/>')}</a>
   </span>`;
 }
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-copy-aredl]');
-  if (btn) copyText(`https://aredl.net/list/${btn.dataset.copyAredl}`, 'AREDL link');
+  if (btn) copyText(levelWebUrl(btn.dataset.copyAredl, btn.dataset.copyMode), 'AREDL link');
 });
 
 // The number copies on click; the ↗ stays a separate link to Newgrounds.
@@ -2956,7 +3142,7 @@ function showMultiLevel(i) {
   const cached = detailCache.get(level.level_id);
   if (cached) { renderLevelDetail(cached); return; }
   if (zone) { delete zone.dataset.level; zone.innerHTML = '<div class="spinner" style="margin:60px auto;"></div>'; }
-  window.aredl.getLevelDetail(level.level_id).then(data => {
+  window.aredl.getLevelDetail(level.level_id, modeOfLevel(level)).then(data => {
     detailCache.set(level.level_id, data);
     rememberPublisher(data);
     if (seq === multiViewSeq && state.multi.size >= 2) { renderLevelDetail(data); renderMultiCredits(); }
@@ -3144,7 +3330,7 @@ function renderMultiSelection() {
       if (token !== multiToken) return;
       try {
         let data = detailCache.get(level.level_id);
-        if (!data) { data = await window.aredl.getLevelDetail(level.level_id); detailCache.set(level.level_id, data); }
+        if (!data) { data = await window.aredl.getLevelDetail(level.level_id, modeOfLevel(level)); detailCache.set(level.level_id, data); }
         rememberPublisher(data);
       } catch { /* leave the id as a fallback label */ }
       renderPublishers();
@@ -3309,7 +3495,7 @@ class VideoDock {
     this.vid = null; this.slot = null; this.origin = null; this.clipParents = [];
     this.title = ''; this.onReturn = null;
     this.playing = false; this.stateKnown = false; this.assumePlaying = false; this.paused = false;
-    this.mode = 'off'; this.leaveSince = 0; this.lastCss = ''; this.animateNext = false;
+    this.mode = 'off'; this.leaveSince = 0; this.hiddenByLeave = false; this.lastCss = ''; this.animateNext = false;
     this.animTimer = null; this.lastPing = 0; this.dragging = false; this.parkedAt = 0;
     docks.add(this);
     this.frame.addEventListener('load', () => this.ping());
@@ -3418,28 +3604,51 @@ class VideoDock {
       }
     }
 
+    // Why isn't it showing? 'tab' = its page is gone (another tab, another level); 'scroll' = still on its page, scrolled out of view.
+    const slotInDom = !!(slot && slot.isConnected);
+    const pageActive = slotInDom && (!slot.closest('.tab') || slot.closest('.tab').classList.contains('active'));
+    const reason = pageActive ? 'scroll' : 'tab';
+    const tabHidden = slotInDom && !pageActive; // switched tab: the slot is still there but hidden - no reason to wait
+    // (a slot that vanished from the page can just be a quick re-render, so that case still gets the short wait below)
+
+    // Everything below is re-decided every frame from the current setting, so changing the setting while a video plays
+    // takes effect straight away (a corner player disappears, a hidden one comes back, ...).
     if (mode === 'inline') {
       this.leaveSince = 0;
       this.paused = false;
-    } else if (this.mode === 'mini') {
-      // once it's a corner player it stays one - even paused or finished - until closed, replaced by a playing video, or brought back
-      mode = 'mini';
-      target = dockMiniRect();
-    } else if (this.isPlaying()) {
-      if (!this.leaveSince) this.leaveSince = Date.now();
-      const settled = Date.now() - this.leaveSince > 220; // ignore a quick re-render of the page
-      if (leave === 'popup') {
+      this.hiddenByLeave = false;
+    } else if (leave === 'popup') {
+      if (this.mode === 'mini' || this.hiddenByLeave) {
+        // once it's a corner player it stays one - even paused or finished - until closed, replaced by a playing video, or brought back
+        // (and a video hidden by another setting comes back as one when the setting changes to this)
+        mode = 'mini';
+        target = dockMiniRect();
+        this.hiddenByLeave = false;
+      } else if (this.isPlaying()) {
+        if (!this.leaveSince) this.leaveSince = Date.now();
+        const settled = tabHidden || Date.now() - this.leaveSince > 220; // ignore a quick re-render of the page
         if (settled) { mode = 'mini'; target = dockMiniRect(); }
         else mode = this.mode; // keep the last look for a moment
-      } else if (settled) {
-        if (leave === 'stop') { this.destroy(); return; }
-        if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; }
-        mode = 'off'; // 'background': hidden, but it keeps playing
+      } else {
+        this.leaveSince = 0;
+      }
+    } else if (this.isPlaying() || this.mode === 'mini') {
+      // sound only / pause / stop: there is no corner player
+      if (!this.leaveSince) this.leaveSince = Date.now();
+      const settled = tabHidden || this.mode === 'mini' || Date.now() - this.leaveSince > 220;
+      if (settled) {
+        if (reason === 'tab') { // leaving the page (switching tab / level) is what pause and stop are for - scrolling is not
+          if (leave === 'stop') { this.destroy(); return; }
+          if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; }
+        }
+        mode = 'off'; // hidden; unless it was just paused/stopped, it keeps playing
+        this.hiddenByLeave = true;
       } else {
         mode = this.mode;
       }
     } else {
       this.leaveSince = 0;
+      if (this.hiddenByLeave) mode = 'off';
     }
 
     // a player with no page slot, not in the corner and not playing has nothing left to do
@@ -3686,7 +3895,7 @@ async function loadLevelDetail(level) {
   const videoZone = document.getElementById('panelVideoZone');
   if (videoZone) videoZone.innerHTML = '<div class="spinner" style="margin:14px auto 4px;"></div>';
   try {
-    const data = await window.aredl.getLevelDetail(level.level_id);
+    const data = await window.aredl.getLevelDetail(level.level_id, modeOfLevel(level));
     detailCache.set(level.level_id, data);
     rememberPublisher(data);
     if (state.selectedId === level.id && state.multi.size < 2) {
@@ -3868,7 +4077,7 @@ async function pumpRecords(st, batch = 50) {
   let pages = 0;
   try {
     while (!st.complete && pages < batch) {
-      const data = await window.aredl.getLevelRecordsPage(st.levelId, st.nextPage);
+      const data = await window.aredl.getLevelRecordsPage(st.levelId, st.nextPage, st.mode);
       if (st.token !== token) return; // you left - stop here, no more requests
       const items = Array.isArray(data) ? data : (data.data || data.records || data.items || []);
       if (!items.length) { st.complete = true; break; }
@@ -3903,7 +4112,7 @@ async function loadLevelRecords(level) {
   const inRange = state.multi.size >= 2;
   let st = inRange ? multiRecordsCache.get(level.level_id) : null; // a level range keeps what it already loaded
   if (!st) {
-    st = { levelId: level.level_id, data: [], nextPage: 1, complete: false, loading: false, error: null, pageSize: null, lastFirstId: null, token: 0 };
+    st = { levelId: level.level_id, mode: modeOfLevel(level), data: [], nextPage: 1, complete: false, loading: false, error: null, pageSize: null, lastFirstId: null, token: 0 };
     if (inRange) multiRecordsCache.set(level.level_id, st);
   }
   recState = st;
@@ -4082,7 +4291,7 @@ async function loadChangelog(reset) {
   el.className = 'state';
   el.innerHTML = '<div class="spinner"></div>Loading changelog…';
   try {
-    const data = await window.aredl.getChangelog(changelogPage);
+    const data = await window.aredl.getChangelog(changelogPage, tabModes.changelog);
     const list = Array.isArray(data) ? data : (data.data || []);
     if (reset && !list.length) throw new Error('Empty response');
     changelogEntries = changelogEntries.concat(list);
@@ -4289,7 +4498,7 @@ async function loadLevelHistory(level) {
   zone.innerHTML = `<div class="section-label">Position History</div><div class="spinner" style="margin:10px auto;"></div>`;
   try {
     const cachedHistory = state.multi.size >= 2 ? multiHistoryCache.get(level.level_id) : null;
-    const data = cachedHistory || await window.aredl.getLevelHistory(level.level_id);
+    const data = cachedHistory || await window.aredl.getLevelHistory(level.level_id, modeOfLevel(level));
     if (state.selectedId !== level.id) return; // selection changed while this was in flight
     if (!cachedHistory && state.multi.size >= 2) multiHistoryCache.set(level.level_id, data);
     const list = Array.isArray(data) ? data : (data.data || data.history || data.items || []);
@@ -4330,16 +4539,6 @@ function humanizeKey(k) {
 // names. Returns true/false when found, null when the data genuinely
 // doesn't distinguish game modes (in which case the Platformer tab says so
 // honestly instead of silently pretending to filter).
-function isPlatformerLevel(l) {
-  if (typeof l.is_platformer === 'boolean') return l.is_platformer;
-  if (typeof l.platformer === 'boolean') return l.platformer;
-  const m = l.gamemode || l.game_mode || l.level_type || l.mode;
-  if (typeof m === 'string') return /platform/i.test(m);
-  return null;
-}
-function platformerIsDetectable(levels) {
-  return levels.some(l => isPlatformerLevel(l) !== null);
-}
 
 function formatValue(v) {
   if (v === null || v === undefined) return '—';
@@ -4395,7 +4594,7 @@ function extractOtherCompletedLevels(data) {
     .map(item => {
       const lid = item.level_id ?? (item.level && item.level.level_id) ?? null;
       const iid = item.id ?? (item.level && item.level.id) ?? null;
-      const level = state.levels.find(l => (lid != null && String(l.level_id) === String(lid)) || (iid != null && String(l.id) === String(iid)));
+      const level = levelsOf(tabModes.profile).find(l => (lid != null && String(l.level_id) === String(lid)) || (iid != null && String(l.id) === String(iid)));
       if (level && !item.hide_video) {
         const url = safeHttpUrl(item.video_url);
         if (url) state.profileRecordVideos.set(String(level.level_id), url);
@@ -4420,7 +4619,10 @@ function renderProfile(data, { isMe }) {
   const displayName = data.global_name || data.username || (isMe ? 'You' : 'Player');
   const avatar = avatarUrl(data);
   const initials = displayName.slice(0, 2).toUpperCase();
-  const flag = countryFlagHtml(data.country, 18);
+  const flag = data.country != null && data.country !== 0 && data.country !== '0'
+    ? `<a href="#" class="flag-link" data-country="${escapeHtml(String(data.country))}" title="Open this country">${countryFlagHtml(data.country, 18)}</a>`
+    : countryFlagHtml(data.country, 18);
+  const pm = tabModes.profile; // the list this profile is shown for
 
   // For "me" the auth'd /levels/ response's own completion markers are used
   // (richer/guaranteed-fresh). For anyone else, the profile response itself
@@ -4428,17 +4630,12 @@ function renderProfile(data, { isMe }) {
   // name that has to be guessed at, same as everywhere else in this app.
   state.profileRecordVideos = new Map();
   const completedLevels = isMe
-    ? state.levels.filter(l => state.completedIds.has(String(l.level_id))).sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9))
+    ? levelsOf(pm).filter(l => modeStore[pm].completedIds.has(String(l.level_id))).sort((a, b) => (a.position ?? 1e9) - (b.position ?? 1e9))
     : extractOtherCompletedLevels(data);
   const packs = Array.isArray(data.packs) ? data.packs : [];
   state.profilePacks = packs;
-  const createdLevels = state.levels.filter(l => String(l.publisher_id) === String(data.id));
+  const createdLevels = levelsOf(pm).filter(l => String(l.publisher_id) === String(data.id));
   const hardestLevel = completedLevels[0] || null;
-  const modeKnown = platformerIsDetectable(state.levels);
-  const completedClassic = completedLevels.filter(l => isPlatformerLevel(l) !== true);
-  const completedPlatformer = completedLevels.filter(l => isPlatformerLevel(l) === true);
-  const createdClassic = createdLevels.filter(l => isPlatformerLevel(l) !== true);
-  const createdPlatformer = createdLevels.filter(l => isPlatformerLevel(l) === true);
   const levelPoints = isMe ? completedLevels.reduce((sum, l) => sum + (l.points || 0), 0) : null;
 
   const rankObj = (data.rank && typeof data.rank === 'object') ? data.rank : null;
@@ -4460,10 +4657,6 @@ function renderProfile(data, { isMe }) {
           <div class="profile-name">${flag}<span>${escapeHtml(displayName)}</span></div>
           <div class="profile-clan">CLAN: ${escapeHtml(clanLabel.toUpperCase())}</div>
           <p class="profile-bio">${data.description ? escapeHtml(data.description) : "This user hasn't provided a description yet."}</p>
-          <div class="profile-mode-tabs">
-            <span class="active" data-pmode="classic">CLASSIC (${completedClassic.length})</span>
-            <span data-pmode="platformer" ${modeKnown ? '' : 'title="This app can\'t tell platformer levels apart from the data it gets"'}>PLATFORMER (${completedPlatformer.length})</span>
-          </div>
           <div class="profile-point-trio">
             <div class="stat"><div class="stat-label">Level Points</div><div class="stat-value">${levelPoints != null ? formatPoints(levelPoints) : '—'}</div></div>
             <div class="stat"><div class="stat-label">Total Points</div><div class="stat-value">${levelPoints != null ? formatPoints(levelPoints) : '—'}</div></div>
@@ -4485,9 +4678,8 @@ function renderProfile(data, { isMe }) {
       </div>
     </div>`;
 
-  state.profileCompleted = { classic: completedClassic, platformer: completedPlatformer };
-  state.profileCreated = { classic: createdClassic, platformer: createdPlatformer };
-  state.profileMode = 'classic';
+  state.profileCompleted = completedLevels;
+  state.profileCreated = createdLevels;
   renderProfileTab('completed');
 
   document.querySelectorAll('#profileContent [data-ptab]').forEach(tab => {
@@ -4505,16 +4697,6 @@ function renderProfile(data, { isMe }) {
       const activePtab = document.querySelector('#profileContent [data-ptab].active');
       renderProfileTab(activePtab ? activePtab.dataset.ptab : 'completed');
     }, 140);
-  });
-
-  document.querySelectorAll('#profileContent [data-pmode]').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('#profileContent [data-pmode]').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      state.profileMode = tab.dataset.pmode;
-      const activePtab = document.querySelector('#profileContent [data-ptab].active');
-      renderProfileTab(activePtab ? activePtab.dataset.ptab : 'completed');
-    });
   });
 
 }
@@ -4550,12 +4732,7 @@ function renderProfileTab(which) {
     return;
   }
   $('#profileSearchWrap').hidden = false;
-  const bucket = which === 'created' ? state.profileCreated : state.profileCompleted;
-  const levels = bucket ? bucket[state.profileMode || 'classic'] : [];
-  if (state.profileMode === 'platformer' && !platformerIsDetectable(state.levels)) {
-    zone.innerHTML = '<div class="dim">This app can\'t tell platformer levels apart in the data it receives, so nothing\'s shown here rather than guessing.</div>';
-    return;
-  }
+  const levels = (which === 'created' ? state.profileCreated : state.profileCompleted) || [];
   const q = ($('#profileSearch') || {}).value || '';
   const terms = searchTerms(q);
   const shown = terms.length
@@ -4568,20 +4745,22 @@ function renderProfileTab(which) {
   observeBannerBackgrounds(shown);
 }
 
+const PLAY_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4.6v10.8a.8.8 0 0 0 1.2.7l8.6-5.4a.8.8 0 0 0 0-1.4L8.2 3.9A.8.8 0 0 0 7 4.6Z" fill="currentColor"/></svg>';
+const OPEN_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg>';
 function completedBannerHtml(l, kind = 'completed') {
   const isMe = state.currentProfileId === '__me__';
   let play;
   if (kind === 'created') {
     // A published level has no "completion video" - keep a neutral icon;
     // clicking the banner (or this) just opens the level in the list.
-    play = `<div class="c-play" title="View this level">▶</div>`;
+    play = `<div class="c-play c-open" title="View this level">${OPEN_ICON}</div>`;
   } else if (isMe) {
-    play = `<div class="c-play" data-play-submission="${l.level_id}" title="Open your submission">▶</div>`;
+    play = `<button type="button" class="c-play" data-play-submission="${l.level_id}" title="Open your submission" aria-label="Open your submission">${PLAY_ICON}</button>`;
   } else {
     const video = state.profileRecordVideos && state.profileRecordVideos.get(String(l.level_id));
     play = video
-      ? `<a class="c-play" href="${escapeHtml(video)}" target="_blank" rel="noopener" title="Watch their completion in your browser" onclick="event.stopPropagation()">▶</a>`
-      : `<div class="c-play c-play-none" title="No completion video available" onclick="event.stopPropagation()">▶</div>`;
+      ? `<a class="c-play" href="${escapeHtml(video)}" target="_blank" rel="noopener" title="Watch their completion in your browser" aria-label="Watch their completion" onclick="event.stopPropagation()">${PLAY_ICON}</a>`
+      : `<div class="c-play c-play-none" title="No completion video available" onclick="event.stopPropagation()">${PLAY_ICON}</div>`;
   }
   return `<div class="completed-banner" id="cbanner-${l.level_id}" data-jump="${l.level_id}">
     <span class="c-rank">${l.position != null ? '#' + l.position : (l.status || 'Legacy')}</span>
@@ -4637,10 +4816,10 @@ document.addEventListener('click', (e) => {
   jumpToSubmission(playBtn.dataset.playSubmission);
 });
 
-async function fetchDetailCached(levelId) {
-  let detail = detailCache.get(levelId);
+async function fetchDetailCached(levelId, mode = 'classic') {
+  let detail = detailCache.get(levelId); // a level id only ever belongs to one list, so the id alone is a safe key
   if (!detail) {
-    detail = await window.aredl.getLevelDetail(levelId);
+    detail = await window.aredl.getLevelDetail(levelId, mode);
     detailCache.set(levelId, detail);
   }
   return detail;
@@ -4648,7 +4827,7 @@ async function fetchDetailCached(levelId) {
 
 async function attachCompletedBannerBg(level) {
   try {
-    const detail = await fetchDetailCached(level.level_id);
+    const detail = await fetchDetailCached(level.level_id, modeOfLevel(level));
     const url = findYoutubeUrl(detail);
     const vid = url ? youtubeThumbId(url) : null;
     if (!vid) return;
@@ -4662,7 +4841,7 @@ async function attachCompletedBannerBg(level) {
 
 async function attachProfileBackground(level) {
   try {
-    const detail = await fetchDetailCached(level.level_id);
+    const detail = await fetchDetailCached(level.level_id, modeOfLevel(level));
     const url = findYoutubeUrl(detail);
     const vid = url ? youtubeThumbId(url) : null;
     if (!vid) return;
@@ -4675,6 +4854,7 @@ async function attachProfileBackground(level) {
 }
 
 async function lookupProfile(id) {
+  state.currentCountryId = null;
   state.currentProfileId = id;
   pushNavState();
   const el = $('#profileState');
@@ -4683,7 +4863,8 @@ async function lookupProfile(id) {
   el.innerHTML = '<div class="spinner"></div>Loading profile…';
   $('#profileContent').innerHTML = '';
   try {
-    const data = await window.aredl.getProfile(id);
+    await ensureLevels(tabModes.profile);
+    const data = await window.aredl.getProfile(id, tabModes.profile);
     if (state.currentProfileId !== id) return; // you navigated elsewhere while this loaded
     renderProfile(data, { isMe: false });
   } catch (err) {
@@ -4698,7 +4879,91 @@ $('#profileLookupBtn').addEventListener('click', () => {
   if (id) lookupProfile(id);
 });
 
+function setProfileMode(mode) { tabModes.profile = mode; const sel = $('#profileMode'); if (sel) sel.value = mode; }
+// the dropdown changed: show the same person (or country) again, from the other list
+function profileModeChanged() {
+  if (state.currentCountryId != null) return lookupCountry(state.currentCountryId);
+  if (state.currentProfileId === '__me__') return $('#myProfileBtn').click();
+  if (state.currentProfileId) return lookupProfile(state.currentProfileId);
+}
+
+// ---- A country, from /aredl/country/{id} or /arepl/country/{id} ----
+const countryName = (code) => {
+  const a2 = toAlpha2(code);
+  if (!a2) return '';
+  try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(a2) || a2; } catch { return a2; }
+};
+function openCountry(id) {
+  showTab('profile');
+  lookupCountry(id);
+}
+async function lookupCountry(id) {
+  state.currentCountryId = id;
+  state.currentProfileId = null;
+  const el = $('#profileState');
+  el.style.display = 'block';
+  el.className = 'state';
+  el.innerHTML = '<div class="spinner"></div>Loading country…';
+  $('#profileContent').innerHTML = '';
+  try {
+    const data = await window.aredl.getCountry(id, tabModes.profile);
+    if (state.currentCountryId !== id) return; // you went elsewhere while this loaded
+    renderCountry(data, id);
+  } catch (err) {
+    if (state.currentCountryId !== id) return;
+    el.className = 'state error';
+    el.innerHTML = `Couldn't load that country (${escapeHtml(errMsg(err))}).`;
+  }
+}
+// The shape of this response isn't documented anywhere this app can see, so the page is built from whatever is
+// there: the numbers become stats, lists of players become a table, lists of levels become level links - and the
+// raw response is always one click away at the bottom.
+function renderCountry(data, id) {
+  $('#profileState').style.display = 'none';
+  const root = (data && typeof data === 'object') ? data : { value: data };
+  const code = root.country ?? root.id ?? id;
+  const name = root.name || root.country_name || countryName(code) || `Country ${id}`;
+  const scalar = (v) => typeof v === 'number' || (typeof v === 'string' && v !== '' && v.length <= 40 && !/^https?:/i.test(v));
+  const stats = [];
+  const walk = (obj, prefix) => Object.entries(obj).forEach(([k, v]) => {
+    if (['id', 'country', 'name', 'country_name'].includes(k) && !prefix) return;
+    if (scalar(v)) stats.push([prefix ? `${prefix} ${humanizeKey(k)}` : humanizeKey(k), v]);
+    else if (v && typeof v === 'object' && !Array.isArray(v) && !prefix) walk(v, humanizeKey(k));
+  });
+  walk(root, '');
+  const lists = Object.entries(root).filter(([, v]) => Array.isArray(v) && v.length && typeof v[0] === 'object');
+  const listHtml = lists.map(([key, arr]) => {
+    const rows = arr.slice(0, 200).map((item, i) => {
+      const u = item.user && typeof item.user === 'object' ? item.user : item;
+      const lvl = item.level && typeof item.level === 'object' ? item.level : item;
+      const pid = u.id ?? item.user_id ?? null;
+      const pname = personName(u) || u.name || '';
+      const lid = lvl.level_id ?? item.level_id ?? null;
+      const pts = item.total_points ?? item.points ?? item.level_points ?? lvl.points ?? null;
+      const rank = item.rank ?? item.country_rank ?? item.position ?? lvl.position ?? i + 1;
+      const label = pname || lvl.name || item.name || '—';
+      const link = pid && pname
+        ? `<a href="#" class="level-link" data-lookup-publisher="${escapeHtml(String(pid))}">${escapeHtml(label)}</a>`
+        : (lid != null ? `<a href="#" class="level-link" data-jump="${escapeHtml(String(lid))}">${escapeHtml(label)}</a>` : `<span>${escapeHtml(label)}</span>`);
+      const av = pname ? avatarUrl(u) : null;
+      return `<div class="country-row"><span class="country-rank">#${escapeHtml(String(rank))}</span>${av ? `<img class="lb-avatar" src="${escapeHtml(av)}" alt="" loading="lazy">` : ''}<span class="country-name">${link}</span><span class="country-pts">${pts != null ? escapeHtml(formatPoints(pts)) : ''}</span></div>`;
+    }).join('');
+    return `<div class="country-section"><h4>${escapeHtml(humanizeKey(key))} <span class="dim-count">(${arr.length.toLocaleString()})</span></h4>${rows}</div>`;
+  }).join('');
+  $('#profileContent').innerHTML = `
+    <div class="profile-page country-page">
+      <div class="country-head">
+        <span class="country-flag">${countryFlagHtml(code, 40)}</span>
+        <div><div class="country-title">${escapeHtml(name)}</div><div class="country-sub">${modeLabel(tabModes.profile)} list</div></div>
+      </div>
+      ${stats.length ? `<div class="country-stats">${stats.map(([k, v]) => `<div class="stat"><div class="stat-label">${escapeHtml(k)}</div><div class="stat-value">${escapeHtml(typeof v === 'number' ? (/point/i.test(k) ? formatPoints(v) : v.toLocaleString()) : String(v))}</div></div>`).join('')}</div>` : ''}
+      ${listHtml || '<div class="dim" style="margin-top:14px;">This country has nothing more to show.</div>'}
+      ${rawDetails('Raw API response', data, ' style="margin-top:16px;"')}
+    </div>`;
+}
+
 wireRefreshButton('profileRefreshBtn', async () => {
+  if (state.currentCountryId != null) return lookupCountry(state.currentCountryId);
   if (state.currentProfileId === '__me__') return $('#myProfileBtn').click();
   if (state.currentProfileId) return lookupProfile(state.currentProfileId);
 });
@@ -4711,6 +4976,7 @@ $('#myProfileBtn').addEventListener('click', async () => {
     showTab('settings');
     return;
   }
+  state.currentCountryId = null;
   state.currentProfileId = '__me__';
   pushNavState();
   const el = $('#profileState');
@@ -4719,7 +4985,8 @@ $('#myProfileBtn').addEventListener('click', async () => {
   el.innerHTML = '<div class="spinner"></div>Loading your profile…';
   $('#profileContent').innerHTML = '';
   try {
-    const data = await window.aredl.getMyProfile();
+    await ensureLevels(tabModes.profile);
+    const data = await window.aredl.getMyProfile(tabModes.profile);
     if (state.currentProfileId !== '__me__') return; // you navigated elsewhere while this loaded
     renderProfile(data, { isMe: true });
   } catch (err) {
@@ -4769,9 +5036,20 @@ function bumpNotifBadge(n) {
 }
 
 // API notifications and local "followed level" updates are shown as one list, newest first.
+// The account's notification feed isn't split by list, so each item is placed by what it says or the level it names;
+// anything that can't be placed shows under both Classic and Platformer.
+function notifMode(item) {
+  const blob = [item.notification_type, item.type, item.category, item.list, item.link, item.url].filter(v => typeof v === 'string').join(' ').toLowerCase();
+  if (/arepl|platformer/.test(blob)) return 'platformer';
+  if (/platformer|arepl/.test(String(item.content || item.message || item.title || '').toLowerCase())) return 'platformer';
+  const lid = item.level_id ?? (item.level && item.level.level_id) ?? (item.data && item.data.level_id) ?? (item.metadata && item.metadata.level_id);
+  if (lid != null) { const l = anyLevel(lid); if (l) return l._mode; }
+  return 'both';
+}
 function renderNotifications() {
   const el = $('#notifState');
-  const api = notifAll.map((item, i) => ({ item, id: notifId(item, i) })).filter(n => !clearedNotifIds.has(n.id)).map(({ item, id }) => ({
+  const wantMode = tabModes.notifications;
+  const api = notifAll.map((item, i) => ({ item, id: notifId(item, i) })).filter(n => !clearedNotifIds.has(n.id)).filter(({ item }) => { const m = notifMode(item); return m === 'both' || m === wantMode; }).map(({ item, id }) => ({
     id,
     text: item.content || item.message || item.title || item.body || JSON.stringify(item),
     type: item.notification_type || null,
@@ -4779,7 +5057,7 @@ function renderNotifications() {
     date: entryDate(item),
     local: false,
   }));
-  const followed = followNotifs.map(n => ({
+  const followed = followNotifs.filter(n => (n.mode || 'classic') === wantMode).map(n => ({
     id: `f:${n.id}`,
     text: `${n.level_name}: ${n.text}`,
     type: 'followed',
@@ -4939,7 +5217,7 @@ async function loadSubmissions() {
   el.className = 'state';
   el.innerHTML = '<div class="spinner"></div>Loading…';
   try {
-    const data = await window.aredl.getSubmissions();
+    const data = await window.aredl.getSubmissions(tabModes.submissions);
     submissionsData = Array.isArray(data) ? data : (data.data || data.submissions || data.items || data.results || []);
     state.submissionsLoaded = true;
     el.style.display = 'none';
@@ -4966,7 +5244,7 @@ function renderSubmissions() {
     const hex = SUBMISSION_STATUS_COLORS[String(status).toLowerCase()] || '#8b8b93';
     const created = subCreated(item);
     const levelId = subLevelId(item);
-    const listedLevel = levelId != null ? state.levels.find(l => String(l.level_id) === String(levelId)) : null;
+    const listedLevel = levelId != null ? levelOf(tabModes.submissions, levelId) : null;
     const positionPrefix = listedLevel && listedLevel.position != null
       ? `<span class="title-pos">#${listedLevel.position}</span><span class="title-divider"></span>`
       : '';
@@ -4998,7 +5276,7 @@ async function attachSubmissionQueue(item, i) {
   const el = document.getElementById(`squeue-${i}`);
   if (id == null) { el?.remove(); return; }
   try {
-    const data = await window.aredl.getSubmissionQueue(id);
+    const data = await window.aredl.getSubmissionQueue(id, tabModes.submissions);
     const pos = (typeof data === 'number') ? data : (data.position ?? data.queue_position ?? data.rank ?? null);
     const el2 = document.getElementById(`squeue-${i}`);
     if (!el2) return;
@@ -5018,7 +5296,7 @@ async function attachSubmissionBg(item, i) {
   try {
     let detail = detailCache.get(levelId);
     if (!detail) {
-      detail = await window.aredl.getLevelDetail(levelId);
+      detail = await window.aredl.getLevelDetail(levelId, tabModes.submissions);
       detailCache.set(levelId, detail);
     }
     const url = findYoutubeUrl(detail);
@@ -5175,6 +5453,52 @@ function enhanceSelect(sel) {
   btn.addEventListener('click', () => (menu ? close() : open()));
   btn.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 }
+// ---- Classic / Platformer dropdowns (every one starts on Classic) ----
+function addModeSelect(tab, onChange) {
+  const row = document.querySelector(`#tab-${tab} .tab-title-row`);
+  if (!row) return null;
+  let actions = row.querySelector('.title-actions');
+  if (!actions) { // a header with a lone button: wrap it so the dropdown can sit beside it
+    actions = document.createElement('div');
+    actions.className = 'title-actions';
+    [...row.children].filter(c => c.tagName !== 'H2').forEach(c => actions.appendChild(c));
+    row.appendChild(actions);
+  }
+  const sel = document.createElement('select');
+  sel.className = 'mode-select';
+  sel.id = `${tab}Mode`;
+  sel.setAttribute('aria-label', 'Which list');
+  sel.innerHTML = '<option value="classic">Classic</option><option value="platformer">Platformer</option>';
+  actions.insertBefore(sel, actions.firstChild);
+  sel.addEventListener('change', () => { tabModes[tab] = sel.value; onChange(sel.value); });
+  return sel;
+}
+// draw now, and again once that list's levels have arrived (names / positions come from them)
+const withLevels = (mode, draw) => { draw(); if (!modeStore[mode].loaded) ensureLevels(mode).then(draw); };
+addModeSelect('favourites', (m) => withLevels(m, renderFavourites));
+addModeSelect('followed', (m) => withLevels(m, renderFollowed));
+addModeSelect('personal', (m) => withLevels(m, renderPersonal));
+addModeSelect('notifications', (m) => withLevels(m, renderNotifications));
+addModeSelect('submissions', (m) => { state.submissionsLoaded = false; ensureLevels(m); loadSubmissions(); });
+addModeSelect('changelog', () => loadChangelog(true));
+addModeSelect('profile', () => profileModeChanged());
+addModeSelect('leaderboard', () => { lbState.data = null; loadLeaderboard(1); });
+{ // Players / Countries, next to the Classic / Platformer one
+  const first = $('#leaderboardMode');
+  const board = document.createElement('select');
+  board.className = 'mode-select';
+  board.id = 'lbBoard';
+  board.setAttribute('aria-label', 'Which leaderboard');
+  board.innerHTML = '<option value="players">Players</option><option value="countries">Countries</option>';
+  first.after(board);
+  board.addEventListener('change', () => {
+    lbState.board = board.value;
+    lbState.data = null;
+    $('#lbSearch').placeholder = board.value === 'countries' ? 'Search countries' : 'Search this page';
+    loadLeaderboard(1);
+  });
+}
+
 document.querySelectorAll('select').forEach(enhanceSelect);
 
 // ---------------------------------------------------------------------------
@@ -5310,6 +5634,8 @@ document.querySelectorAll('input[type=range]').forEach(enhanceSlider);
   window.dispatchEvent(new Event('aredl:ready'));
   await loadLevels();
   startFollowing();
+  // the platformer list loads quietly in the background, so favourites / personal list / notifications can use it
+  ensureLevels('platformer').then(() => { renderFavourites(); renderFollowed(); renderPersonal(); });
 })();
 
 loadFavourites();

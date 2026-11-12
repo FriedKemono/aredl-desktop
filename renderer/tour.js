@@ -43,6 +43,14 @@
         + (navTop() && q('#navMore') && !q('#navMore').hidden ? ' Tabs you tuck away sit behind the <b>⋯</b> button.' : ''),
     },
     {
+      id: 'modes',
+      tab: 'list',
+      target: '.mode-bar',
+      side: 'bottom',
+      title: 'Classic and Platformer',
+      body: 'This dropdown switches between the <b>Classic</b> and <b>Platformer</b> lists. Favourites, Followed levels, the Personal list, Profile, Submissions, Notifications, Changelog and the Leaderboard (which also has a Countries board) each have the same dropdown. They all start on Classic.',
+    },
+    {
       id: 'search',
       tab: 'list',
       target: '.search-wrap',

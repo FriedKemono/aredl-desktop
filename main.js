@@ -65,17 +65,21 @@ function applyTaskbarIdentity(win) {
 // ---------------------------------------------------------------------------
 const API_BASE = 'https://api.aredl.net/v2/api';
 
+// Classic levels live under /aredl/..., platformer ones under /arepl/... - the same endpoints otherwise.
+const apiPrefix = (mode) => (mode === 'platformer' ? 'arepl' : 'aredl');
 const ENDPOINTS = {
-  levels: `${API_BASE}/aredl/levels/?exclude_pending=false&exclude_removed=false`,
-  levelDetail: (levelId) => `${API_BASE}/aredl/levels/${levelId}`, // confirmed by user
-  levelHistory: (levelId) => `${API_BASE}/aredl/levels/${levelId}/history`, // confirmed by user
-  levelRecords: (levelId, page) => `${API_BASE}/aredl/levels/${levelId}/records?page=${page}`, // confirmed endpoint, page param follows the same convention as changelog
-  submissions: `${API_BASE}/aredl/submissions/@me`, // confirmed by user
-  submissionQueue: (id) => `${API_BASE}/aredl/submissions/${id}/queue`, // confirmed by user
-  notifications: `${API_BASE}/users/@me/notifications`,
-  profile: (id) => `${API_BASE}/aredl/profile/${id}`,
-  changelog: (page) => `${API_BASE}/aredl/changelog?page=${page}`,
-  leaderboard: (page) => `${API_BASE}/aredl/leaderboard?page=${page}&per_page=50`,
+  levels: (mode) => `${API_BASE}/${apiPrefix(mode)}/levels/?exclude_pending=false&exclude_removed=false`,
+  levelDetail: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}`, // confirmed by user
+  levelHistory: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/history`, // confirmed by user
+  levelRecords: (levelId, page, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/records?page=${page}`, // confirmed endpoint, page param follows the same convention as changelog
+  submissions: (mode) => `${API_BASE}/${apiPrefix(mode)}/submissions/@me`, // confirmed by user
+  submissionQueue: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/submissions/${id}/queue`, // confirmed by user
+  notifications: `${API_BASE}/users/@me/notifications`, // one feed for the account, not per list
+  profile: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/profile/${id}`,
+  changelog: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/changelog?page=${page}`,
+  leaderboard: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/leaderboard?page=${page}&per_page=50`,
+  countries: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/leaderboard/countries?page=${page}&per_page=50`,
+  country: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/country/${encodeURIComponent(id)}`,
 };
 
 const CHANGELOG_PAGE_SIZE = 20;
@@ -480,40 +484,42 @@ ipcMain.handle('window:setOverlay', async (_e, { color, symbolColor } = {}) => {
 
 // The last level list is kept on disk so the next start-up can show it instantly while the live one loads.
 // (It's only reused when you're signed in the same way as when it was saved, so ticks never leak between accounts.)
-const levelsCacheFile = () => path.join(app.getPath('userData'), 'levels-cache.json');
-ipcMain.handle('api:getLevels', async () => {
-  const data = await apiFetch(ENDPOINTS.levels);
-  fs.promises.writeFile(levelsCacheFile(), JSON.stringify({ hadKey: !!loadApiKey(), savedAt: Date.now(), levels: data })).catch(() => {});
+const levelsCacheFile = (mode) => path.join(app.getPath('userData'), mode === 'platformer' ? 'levels-cache-platformer.json' : 'levels-cache.json');
+ipcMain.handle('api:getLevels', async (_e, mode) => {
+  const data = await apiFetch(ENDPOINTS.levels(mode));
+  fs.promises.writeFile(levelsCacheFile(mode), JSON.stringify({ hadKey: !!loadApiKey(), savedAt: Date.now(), levels: data })).catch(() => {});
   return data;
 });
-ipcMain.handle('api:getCachedLevels', async () => {
+ipcMain.handle('api:getCachedLevels', async (_e, mode) => {
   try {
-    const c = JSON.parse(await fs.promises.readFile(levelsCacheFile(), 'utf8'));
+    const c = JSON.parse(await fs.promises.readFile(levelsCacheFile(mode), 'utf8'));
     return c && c.hadKey === !!loadApiKey() && Array.isArray(c.levels) ? c.levels : null;
   } catch { return null; }
 });
 
-ipcMain.handle('api:getChangelog', async (_e, page) => apiFetch(ENDPOINTS.changelog(page || 1)));
+ipcMain.handle('api:getChangelog', async (_e, page, mode) => apiFetch(ENDPOINTS.changelog(page || 1, mode)));
 
-ipcMain.handle('api:getLeaderboard', async (_e, page) => apiFetch(ENDPOINTS.leaderboard(page || 1)));
+ipcMain.handle('api:getLeaderboard', async (_e, page, mode) => apiFetch(ENDPOINTS.leaderboard(page || 1, mode)));
+ipcMain.handle('api:getCountries', async (_e, page, mode) => apiFetch(ENDPOINTS.countries(page || 1, mode)));
+ipcMain.handle('api:getCountry', async (_e, id, mode) => apiFetch(ENDPOINTS.country(id, mode)));
 
-ipcMain.handle('api:getProfile', async (_e, id) => apiFetch(ENDPOINTS.profile(id)));
+ipcMain.handle('api:getProfile', async (_e, id, mode) => apiFetch(ENDPOINTS.profile(id, mode)));
 
-ipcMain.handle('api:getLevelDetail', async (_e, levelId) => apiFetch(ENDPOINTS.levelDetail(levelId)));
+ipcMain.handle('api:getLevelDetail', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelDetail(levelId, mode)));
 
-ipcMain.handle('api:getLevelHistory', async (_e, levelId) => apiFetch(ENDPOINTS.levelHistory(levelId)));
+ipcMain.handle('api:getLevelHistory', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelHistory(levelId, mode)));
 
 // One page of records at a time - the renderer drives the paging so it can show
 // records as they arrive, stop when you leave, and load more on request.
-ipcMain.handle('api:getLevelRecordsPage', async (_e, levelId, page) => apiFetch(ENDPOINTS.levelRecords(levelId, page || 1)));
+ipcMain.handle('api:getLevelRecordsPage', async (_e, levelId, page, mode) => apiFetch(ENDPOINTS.levelRecords(levelId, page || 1, mode)));
 
-ipcMain.handle('api:getLevelRecords', async (_e, levelId) => {
+ipcMain.handle('api:getLevelRecords', async (_e, levelId, mode) => {
   let all = [];
   let page = 1;
   let pageSize = null;
   let lastFirstId = null;
   for (;;) {
-    const data = await apiFetch(ENDPOINTS.levelRecords(levelId, page));
+    const data = await apiFetch(ENDPOINTS.levelRecords(levelId, page, mode));
     const pageItems = Array.isArray(data) ? data : (data.data || data.records || data.items || []);
     if (!pageItems.length) break;
     if (pageSize == null) pageSize = pageItems.length;
@@ -530,26 +536,29 @@ ipcMain.handle('api:getLevelRecords', async (_e, levelId) => {
   return all;
 });
 
-ipcMain.handle('api:getSubmissionQueue', async (_e, submissionId) => apiFetch(ENDPOINTS.submissionQueue(submissionId), { requireAuth: true }));
+ipcMain.handle('api:getSubmissionQueue', async (_e, submissionId, mode) => apiFetch(ENDPOINTS.submissionQueue(submissionId, mode), { requireAuth: true }));
 
 ipcMain.handle('api:getRequestLog', async () => requestLog);
 
-ipcMain.handle('api:getSubmissions', async () => apiFetch(ENDPOINTS.submissions, { requireAuth: true }));
+ipcMain.handle('api:getSubmissions', async (_e, mode) => apiFetch(ENDPOINTS.submissions(mode), { requireAuth: true }));
 
 // "My profile": there's no confirmed identity endpoint. We try, in order:
 // a remembered id (manually entered, or previously resolved), then the bare
 // /users/@me (never actually tested before - only its /notifications
 // sub-route was confirmed to require auth), then bail out with a clear
 // error so the UI can ask for a manual ID.
-ipcMain.handle('api:getMyProfile', async () => {
+ipcMain.handle('api:getMyProfile', async (_e, mode) => {
   const key = loadApiKey();
   if (!key) throw new Error('Not signed in');
 
   const id = loadMyId();
-  if (id) return apiFetch(ENDPOINTS.profile(id));
+  if (id) return apiFetch(ENDPOINTS.profile(id, mode));
 
   const data = await apiFetch(`${API_BASE}/users/@me`);
-  if (data && data.id) saveMyId(data.id);
+  if (data && data.id) {
+    saveMyId(data.id);
+    if (mode === 'platformer') return apiFetch(ENDPOINTS.profile(data.id, mode)); // the id works for both lists
+  }
   return data;
 });
 

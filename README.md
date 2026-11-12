@@ -138,3 +138,11 @@ through search filters, the right-click menu, the personal list, favourites, fol
 the top-bar tabs and reordering, multi-select and the buttons by a level's name. Replay it any time from
 **Settings → About → Replay tour**. The tour lives in `renderer/tour.js`; raise `TOUR_VERSION` there to show
 it again to everyone after adding big new features.
+
+## Classic and Platformer
+
+The app covers both lists: Classic (`/api/aredl/...`) and Platformer (`/api/arepl/...`). The Demon List, Favourites,
+Followed levels, Personal list, Profile, Submissions, Notifications, Changelog and the Leaderboard each have a
+Classic / Platformer dropdown, always starting on Classic. The Leaderboard also has a Players / Countries dropdown;
+clicking a country (or a flag) opens it in the Profile tab (`/api/aredl/country/{id}`, or `arepl` for platformer).
+Favourites, followed levels and personal-list entries remember which list they belong to (`mode`); older ones count as Classic.
