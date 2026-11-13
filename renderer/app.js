@@ -222,7 +222,7 @@ function restoreNav(nav) {
       const level = state.levels.find(l => String(l.id) === String(nav.levelId));
       if (level) {
         selectLevel(level);
-        document.querySelector(`.list-row[data-id="${CSS.escape(String(level.id))}"]`)?.scrollIntoView({ block: 'nearest' });
+        scrollListNearest(level.id);
       }
     } else if (nav.tab === 'profile') {
       restoreProfileView(nav.profile ?? null);
@@ -730,6 +730,7 @@ $('#radiusSlider').addEventListener('input', () => { setSetting('radius', Number
 function applyDensity() {
   document.body.classList.toggle('compact', appSettings.density === 'compact');
   $('#densitySelect').value = appSettings.density === 'compact' ? 'compact' : 'comfortable';
+  relayoutList(); // rows are a different height now
 }
 $('#densitySelect').addEventListener('change', () => { setSetting('density', $('#densitySelect').value); applyDensity(); });
 
@@ -738,6 +739,40 @@ function applyMotion() {
   $('#reduceMotion').checked = !!appSettings.reduceMotion;
 }
 $('#reduceMotion').addEventListener('change', () => { setSetting('reduceMotion', $('#reduceMotion').checked); applyMotion(); });
+
+// ---- Performance: Lite mode, and an offer of it when the app looks slow ----
+function applyPerf() {
+  document.body.classList.toggle('lite', appSettings.perf === 'lite');
+  $('#perfSelect').value = appSettings.perf === 'lite' ? 'lite' : 'standard';
+}
+$('#perfSelect').addEventListener('change', () => { setSetting('perf', $('#perfSelect').value); applyPerf(); });
+
+// Watch how long frames take while the list is being scrolled. If it's clearly struggling, offer Lite mode once.
+let slowFrames = 0, lastScrollFrame = 0;
+function noteScrollFrame() {
+  const now = performance.now();
+  const gap = now - lastScrollFrame;
+  lastScrollFrame = now;
+  if (appSettings.perf === 'lite' || appSettings.perfNudgeSeen || gap > 150) return; // a pause between scrolls isn't slowness
+  if (gap > 45) slowFrames++;                                                         // slower than ~22 frames a second
+  if (slowFrames >= 30) offerLiteMode();
+}
+function offerLiteMode() {
+  slowFrames = -Infinity;
+  setSetting('perfNudgeSeen', true);
+  const el = document.createElement('div');
+  el.className = 'perf-nudge';
+  el.setAttribute('role', 'alert');
+  el.innerHTML = `<div class="perf-text"><b>Running slowly?</b><span>Lite mode turns off blur, shadows and animations to speed things up. You can change it any time in Settings → Appearance.</span></div>
+    <div class="perf-actions"><button class="btn btn-ghost" type="button" data-act="no">No thanks</button><button class="btn" type="button" data-act="yes">Switch to Lite mode</button></div>`;
+  document.body.appendChild(el);
+  el.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.act === 'yes') { setSetting('perf', 'lite'); applyPerf(); }
+    el.remove();
+  });
+}
 
 // backdrop brightness (unset = the theme's own default) + show / drift toggles
 const bgBrightDefault = () => document.body.classList.contains('glassy') ? 50 : 32;
@@ -777,6 +812,7 @@ function applyAppearance() {
   applyRadius();
   applyDensity();
   applyMotion();
+  applyPerf();
   applyBgBright();
   applyBgToggles();
 }
@@ -1236,18 +1272,28 @@ function applyFilters() {
   requestAnimationFrame(scrollListToSelected); // once more after layout settles (e.g. the tab only just became visible)
 }
 
-// Centre the selected row inside the list. Done by hand on the list's own
-// scroller: scrollIntoView() also scrolls every ancestor, and with
-// off-screen rows only estimated in height it used to land far off target.
+// Centre the selected row inside the list. The list only draws the rows you can see (see renderList), so
+// this works from the row's computed position rather than from the row itself.
 function scrollListToSelected() {
   if (state.selectedId == null) return;
   const list = $('#list');
-  const row = list && list.querySelector(`.list-row[data-id="${CSS.escape(String(state.selectedId))}"]`);
-  if (!row) return;
-  const lr = list.getBoundingClientRect();
-  const rr = row.getBoundingClientRect();
-  if (!lr.height) return; // list isn't visible
-  list.scrollTop += (rr.top - lr.top) - (list.clientHeight - rr.height) / 2;
+  const i = listV.byId.get(String(state.selectedId));
+  if (i == null || !list || !list.clientHeight) return; // not in this list, or the list isn't visible
+  const target = listV.tops[i] + listV.rowH / 2 - list.clientHeight / 2;
+  list.scrollTop = Math.max(0, Math.min(target, listV.total - list.clientHeight));
+  paintListWindow();
+  updateStickyLabel();
+}
+// Scroll just enough to bring a level's row into view (no-op when it already is).
+function scrollListNearest(id) {
+  const list = $('#list');
+  const i = listV.byId.get(String(id));
+  if (i == null || !list || !list.clientHeight) return;
+  const top = listV.tops[i], bottom = top + listV.rowH;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+  paintListWindow();
+  updateStickyLabel();
 }
 
 // ---------------------------------------------------------------------------
@@ -1332,17 +1378,135 @@ function updateStickyLabel() {
   const list = document.getElementById('list');
   const label = document.getElementById('listStickyLabel');
   if (!list || !label) return;
-  const lt = list.getBoundingClientRect().top;
+  const st = list.scrollTop;
   let cur = null;
-  for (const d of list.querySelectorAll('.list-divider')) {
-    if (d.getBoundingClientRect().top - lt <= 4) cur = d; else break;
+  for (const d of listV.dividers) {
+    if (d.top - st <= 4) cur = d; else break;
   }
-  const show = cur && cur.getBoundingClientRect().bottom - lt <= 0;
-  if (show) label.firstElementChild.textContent = cur.textContent;
+  const show = cur && cur.top + listV.divH - st <= 0; // that section's own header has scrolled off the top
+  if (show) label.firstElementChild.textContent = cur.text;
   label.classList.toggle('show', !!show);
   list.classList.toggle('has-sticky', !!show);
 }
-document.getElementById('list').addEventListener('scroll', () => requestAnimationFrame(updateStickyLabel), { passive: true });
+// the list's scroll position decides which rows exist: redraw the window (at most once per frame)
+let listScrollRaf = 0;
+document.getElementById('list').addEventListener('scroll', () => {
+  if (listScrollRaf) return;
+  listScrollRaf = requestAnimationFrame(() => { listScrollRaf = 0; paintListWindow(); updateStickyLabel(); noteScrollFrame(); });
+}, { passive: true });
+
+// ---------------------------------------------------------------------------
+// The Demon List draws only the rows you can see.
+// Every row has the same height, so where each one sits is just arithmetic. The list holds a tall empty
+// "spacer" (so the scrollbar is the right size) and a small "window" of real rows positioned inside it, rebuilt
+// as you scroll. Drawing ~1,500 rows made scrolling, filtering and every redraw slow on weaker computers.
+// ---------------------------------------------------------------------------
+const listV = { items: [], tops: [], total: 0, rowH: 40, divH: 38, start: -1, end: -1, byId: new Map(), dividers: [], needsMeasure: false };
+const LIST_BUFFER_PX = 700; // how far above / below the visible part rows are kept ready
+const LIST_REFRESH_PX = 250; // rebuild once the visible part gets this close to the edge of the drawn rows
+
+function listRowHtml(l, favIds, followIds) {
+  const isFav = favIds.has(String(l.level_id)), isFollow = followIds.has(String(l.level_id));
+  const completed = state.completedIds.has(String(l.level_id));
+  const selected = isRowSelected(l.id);
+  const hasPosition = l.position != null;
+  const rankLabel = hasPosition ? `#${l.position}` : ((l.status === 'Pending' || l.status === 'Removed') ? '—' : (l.status || 'Legacy'));
+  return `<div class="list-row ${completed ? 'completed' : ''} ${selected ? 'selected' : ''} ${l.status === 'Removed' ? 'removed' : ''} ${isFav ? 'favourite' : ''} ${isFollow ? 'followed' : ''}"
+         data-id="${l.id}" data-level-id="${l.level_id}">
+      <span class="rank-mini${hasPosition ? '' : (rankLabel === '—' ? ' rank-mini-dash' : ' rank-mini-status')}">${escapeHtml(rankLabel)}</span>
+      <span class="name-mini">${escapeHtml(l.name)}</span>
+      ${isFollow ? bellSvg('follow-mini') : ''}
+      ${isFav ? starSvg('fav-mini') : ''}
+      ${completed ? '<span class="check-mini">✓</span>' : ''}
+    </div>`;
+}
+const listItemH = (it) => (it.divider != null ? listV.divH : listV.rowH);
+
+// Measure a real row and divider (their heights follow the density setting). Returns false while the list is hidden.
+function measureListMetrics() {
+  const list = $('#list');
+  const spacer = list.firstElementChild;
+  if (!list.clientHeight || !spacer) return false;
+  const probe = document.createElement('div');
+  probe.className = 'list-window';
+  probe.style.visibility = 'hidden';
+  probe.innerHTML = '<div class="list-divider"><span>X</span></div><div class="list-row"><span class="rank-mini">#1</span><span class="name-mini">X</span></div>';
+  spacer.appendChild(probe);
+  const full = (el) => { const cs = getComputedStyle(el); return el.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom); };
+  const d = full(probe.firstElementChild), r = full(probe.lastElementChild);
+  probe.remove();
+  if (d > 0 && r > 0) { listV.divH = d; listV.rowH = r; return true; }
+  return false;
+}
+function layoutListItems() {
+  const { items, tops } = listV;
+  tops.length = items.length;
+  let y = 0;
+  for (let i = 0; i < items.length; i++) { tops[i] = y; y += listItemH(items[i]); }
+  listV.total = y;
+  listV.dividers = [];
+  items.forEach((it, i) => { if (it.divider != null) listV.dividers.push({ top: tops[i], text: it.divider }); });
+  const spacer = $('#list').firstElementChild;
+  if (spacer) spacer.style.height = y + 'px';
+}
+// index of the first item whose bottom edge is below y
+function listIndexAt(y) {
+  const { items, tops } = listV;
+  let lo = 0, hi = items.length - 1, ans = items.length;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (tops[mid] + listItemH(items[mid]) > y) { ans = mid; hi = mid - 1; } else lo = mid + 1;
+  }
+  return ans;
+}
+function paintListWindow(force) {
+  const list = $('#list');
+  const win = list && list.querySelector('.list-window');
+  if (!win) return;
+  const { items, tops } = listV;
+  if (!items.length) { win.innerHTML = ''; listV.start = listV.end = -1; return; }
+  const vh = list.clientHeight || 640, st = list.scrollTop;
+  if (!force && listV.start >= 0) {
+    const winTop = tops[listV.start];
+    const winBottom = listV.end < items.length ? tops[listV.end] : listV.total;
+    const okTop = listV.start === 0 || st - winTop > LIST_REFRESH_PX;
+    const okBottom = listV.end >= items.length || winBottom - (st + vh) > LIST_REFRESH_PX;
+    if (okTop && okBottom) return; // still well inside the rows that are drawn
+  }
+  const start = Math.min(listIndexAt(st - LIST_BUFFER_PX), items.length - 1);
+  let end = start;
+  while (end < items.length && tops[end] < st + vh + LIST_BUFFER_PX) end++;
+  const favIds = new Set(state.favourites.map(f => String(f.level_id)));
+  const followIds = new Set(state.following.map(f => String(f.level_id)));
+  let html = '';
+  for (let i = start; i < end; i++) {
+    const it = items[i];
+    html += it.divider != null ? `<div class="list-divider"><span>${escapeHtml(it.divider)}</span></div>` : listRowHtml(it.level, favIds, followIds);
+  }
+  win.innerHTML = html;
+  win.style.top = tops[start] + 'px';
+  listV.start = start;
+  listV.end = end;
+}
+// The list got taller / shorter / different row height (density) / was hidden and has just appeared: redo the arithmetic.
+function relayoutList() {
+  const list = $('#list');
+  const spacer = list && list.firstElementChild;
+  if (!spacer || !spacer.classList.contains('list-spacer')) return;
+  const keep = listV.items[listIndexAt(list.scrollTop)]; // stay on the same row
+  listV.needsMeasure = !measureListMetrics();
+  layoutListItems();
+  const i = keep ? listV.items.indexOf(keep) : 0;
+  list.scrollTop = listV.tops[Math.max(0, i)] || 0;
+  paintListWindow(true);
+  updateStickyLabel();
+}
+if (typeof ResizeObserver === 'function') {
+  new ResizeObserver(() => {
+    if (!$('#list').clientHeight) return;
+    if (listV.needsMeasure) relayoutList(); else paintListWindow(true); // a taller window shows more rows
+  }).observe(document.getElementById('list'));
+}
 
 function renderList() {
   $('#listState').style.display = 'none';
@@ -1359,33 +1523,30 @@ function renderList() {
   const sortMode = $('#sortBy').value;
   let prevStatus = null;
   let extendedShown = false;
-  const favIds = new Set(state.favourites.map(f => String(f.level_id)));
-  const followIds = new Set(state.following.map(f => String(f.level_id)));
-  $('#list').innerHTML = state.filtered.map(l => {
-    const isFav = favIds.has(String(l.level_id)), isFollow = followIds.has(String(l.level_id));
-    const completed = state.completedIds.has(String(l.level_id));
-    const selected = isRowSelected(l.id);
-    const hasPosition = l.position != null;
-    const rankLabel = hasPosition ? `#${l.position}` : ((l.status === 'Pending' || l.status === 'Removed') ? '—' : (l.status || 'Legacy'));
-    let divider = '';
+  // the flat list of what goes in the list: section headers and levels, in order
+  const items = [];
+  state.filtered.forEach(l => {
     if (showAll && l.status !== prevStatus) {
-      divider += `<div class="list-divider"><span>${escapeHtml(l.status || 'Other')}</span></div>`;
+      items.push({ divider: l.status || 'Other' });
       prevStatus = l.status;
     }
     if (sortMode === 'position' && l.status === 'MainList' && l.position === 151 && !extendedShown) {
-      divider += `<div class="list-divider"><span>Extended List</span></div>`;
+      items.push({ divider: 'Extended List' });
       extendedShown = true;
     }
-    return `${divider}
-    <div class="list-row ${completed ? 'completed' : ''} ${selected ? 'selected' : ''} ${l.status === 'Removed' ? 'removed' : ''} ${isFav ? 'favourite' : ''} ${isFollow ? 'followed' : ''}"
-         data-id="${l.id}" data-level-id="${l.level_id}">
-      <span class="rank-mini${hasPosition ? '' : (rankLabel === '—' ? ' rank-mini-dash' : ' rank-mini-status')}">${escapeHtml(rankLabel)}</span>
-      <span class="name-mini">${escapeHtml(l.name)}</span>
-      ${isFollow ? bellSvg('follow-mini') : ''}
-      ${isFav ? starSvg('fav-mini') : ''}
-      ${completed ? '<span class="check-mini">✓</span>' : ''}
-    </div>`;
-  }).join('');
+    items.push({ level: l });
+  });
+  const list = $('#list');
+  const previousScroll = list.scrollTop;
+  list.innerHTML = '<div class="list-spacer"><div class="list-window"></div></div>';
+  listV.items = items;
+  listV.byId = new Map();
+  items.forEach((it, i) => { if (it.level) listV.byId.set(String(it.level.id), i); });
+  listV.needsMeasure = !measureListMetrics();
+  listV.start = listV.end = -1;
+  layoutListItems();
+  list.scrollTop = Math.min(previousScroll, Math.max(0, listV.total - list.clientHeight));
+  paintListWindow(true);
   updateStickyLabel();
 }
 

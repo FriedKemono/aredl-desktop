@@ -12,6 +12,13 @@ const root = path.join(__dirname, '..');
 const run = (cmd) => { console.log(`> ${cmd}`); execSync(cmd, { stdio: 'inherit', cwd: root }); };
 const out = (cmd) => execSync(cmd, { encoding: 'utf8', cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
+// every update needs a changelog entry (renderer/releases.js) - it becomes the release notes and the in-app "What's new"
+const releases = require('../renderer/releases.js');
+if (!releases.some(r => r.version === version)) {
+  console.error(`There's no changelog entry for ${version} yet.\nAdd one at the top of renderer/releases.js, then run this again.`);
+  process.exit(1);
+}
+
 try {
   if (!fs.existsSync(path.join(root, '.git'))) {
     const { owner, repo } = (pkg.build && pkg.build.publish) || {};

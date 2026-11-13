@@ -396,6 +396,13 @@
             <div class="setting-label"><strong>Motion</strong><small>Turns off page, menu and background animations.</small></div>
             <label class="checkbox-wrap"><input type="checkbox" id="reduceMotion"> Reduce animations</label>
           </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Performance</strong><small>Lite mode turns off blur, shadows and animations. Handy on older or slower computers.</small></div>
+            <select id="perfSelect">
+              <option value="standard">Standard</option>
+              <option value="lite">Lite</option>
+            </select>
+          </div>
         </div>
       </div>
       <div class="settings-card" id="adaptiveCard">
@@ -549,6 +556,10 @@
             <div class="setting-label"><strong>App tour</strong><small>A quick walkthrough of search, the right-click menu, favourites, the personal list, tabs and themes.</small></div>
             <button class="btn btn-ghost" id="tourReplayBtn" type="button">Replay tour</button>
           </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Changelog</strong><small>What changed in every version of the app.</small></div>
+            <button class="btn btn-ghost" id="whatsNewBtn" type="button">View changelog</button>
+          </div>
         </div>
         <p class="dim" style="margin:12px 0 0;">
           Unofficial desktop client for the All Rated Extreme Demons List. Not affiliated with
@@ -560,6 +571,14 @@
     </section>
 
   </main>
+</div>
+
+<div class="modal-backdrop" id="whatsNew" hidden>
+  <div class="modal wn-modal" role="dialog" aria-label="What's new">
+    <div class="modal-head"><h3 id="whatsNewTitle">What’s new</h3><button class="icon-tool" id="whatsNewClose" aria-label="Close">✕</button></div>
+    <div class="modal-body" id="whatsNewBody"></div>
+    <div class="wn-foot"><button class="btn" id="whatsNewOk" type="button">Got it</button></div>
+  </div>
 </div>
 
 <div class="modal-backdrop" id="searchHelp" hidden>
@@ -657,7 +676,9 @@
 </template>
 
 <script src="countries.js"></script>
+<script src="releases.js"></script>
 <script src="app.js"></script>
 <script src="tour.js"></script>
+<script src="whatsnew.js"></script>
 </body>
 </html>

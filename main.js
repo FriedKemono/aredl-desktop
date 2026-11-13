@@ -664,6 +664,9 @@ function setupAutoUpdate() {
   autoUpdater.autoInstallOnAppQuit = true; // if you ignore the prompt, it installs the next time you Quit
   autoUpdater.on('error', (err) => console.warn('Update check failed:', err && err.message));
   autoUpdater.on('update-downloaded', async (info) => {
+    // the release notes (from renderer/releases.js) travel with the update; show them as plain text
+    const raw = Array.isArray(info.releaseNotes) ? info.releaseNotes.map(n => n && n.note).join('\n') : String(info.releaseNotes || '');
+    const notes = raw.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\*\*/g, '').trim().slice(0, 900);
     const { response } = await dialog.showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined, {
       type: 'info',
       buttons: ['Restart now', 'Later'],
@@ -671,7 +674,7 @@ function setupAutoUpdate() {
       cancelId: 1,
       title: 'Update ready',
       message: `AREDL Desktop ${info.version} is ready to install.`,
-      detail: 'Restart to finish updating. If you choose Later, it installs the next time you quit the app.',
+      detail: (notes ? `${notes}\n\n` : '') + 'Restart to finish updating. If you choose Later, it installs the next time you quit the app.',
     });
     if (response === 0) { app.isQuiting = true; autoUpdater.quitAndInstall(); }
   });

@@ -146,3 +146,15 @@ Followed levels, Personal list, Profile, Submissions, Changelog and the Leaderbo
 Classic / Platformer dropdown, always starting on Classic. The Leaderboard also has a Players / Countries dropdown;
 clicking a country (or a flag) opens it in the Profile tab (`/api/aredl/country/{id}`, or `arepl` for platformer).
 Favourites, followed levels and personal-list entries remember which list they belong to (`mode`); older ones count as Classic.
+
+## Changelog
+
+Every update has an entry at the top of `renderer/releases.js` (and a matching `version` in `package.json`).
+That single list becomes the in-app **What's new** window (shown once after an update, and under
+Settings → About → View changelog), the notes on the GitHub release, and the text in the "update ready" prompt.
+`npm run ship` refuses to release a version that has no entry.
+
+## Performance
+
+The Demon List only draws the rows on screen. Settings → Appearance → **Performance → Lite** turns off blur,
+shadows and animations for slower computers, and the app offers it once if scrolling looks slow.

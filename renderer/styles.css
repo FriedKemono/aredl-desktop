@@ -975,11 +975,17 @@ body.glassy{
 }
 body.glassy .page-bg{filter:blur(34px) brightness(.5) saturate(1.5);}
 body.glassy .page-bg.on{opacity:.85;}
+/* Panels that scroll, or sit on a page that scrolls, keep the translucent look but get no blur of their own:
+   re-blurring behind them on every scrolled frame is what made the glass themes crawl on weaker computers, and
+   the backdrop they sit on is already heavily blurred. Only the parts that stay put blur what's behind them. */
 body.glassy .notif-item,body.glassy .change-entry,body.glassy .submission-card,body.glassy .settings-card,
 body.glassy .profile-card,body.glassy .pack-banner,body.glassy .theme-card,body.glassy .profile-side,
 body.glassy .profile-main,body.glassy .fav-card,body.glassy .follow-card,body.glassy .list-col,
 body.glassy .detail-col,body.glassy .records-col,body.glassy .completed-banner,
-body.glassy .tag-filter-panel,body.glassy .state,
+body.glassy .tag-filter-panel,body.glassy .state{
+  background-color:var(--glass);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 0 0 1px rgba(255,255,255,.04);
+}
 body.glassy .sidebar,body.glassy.custom-titlebar .titlebar,body.glassy .ctx-menu{
   background-color:var(--glass);
   backdrop-filter:blur(var(--glass-blur,22px)) saturate(1.6);-webkit-backdrop-filter:blur(var(--glass-blur,22px)) saturate(1.6);
@@ -2143,3 +2149,56 @@ body.glassy:not(.adaptive) .list-row.selected{text-shadow:none;}
 .list-side .mode-bar{margin:0;display:block;}
 .list-side .mode-bar .dd{display:block;width:100%;}
 .list-side .mode-bar .dd-btn{width:100%;justify-content:space-between;}
+
+
+/* the list draws only the rows you can see (see renderList), so they no longer need content-visibility tricks */
+.list-spacer{position:relative;}
+.list-window{position:absolute;left:0;right:0;top:0;}
+.list-window .list-divider{position:static;}
+.list-row{content-visibility:visible;contain-intrinsic-size:none;}
+
+
+/* =====================================================================
+   Lite mode: for older / slower computers. No blur, no shadows, no animations.
+   ===================================================================== */
+body.lite *,body.lite *::before,body.lite *::after{
+  backdrop-filter:none !important;-webkit-backdrop-filter:none !important;
+  box-shadow:none !important;text-shadow:none !important;filter:none !important;
+  transition-duration:.001ms !important;transition-delay:0s !important;
+  animation-duration:.001ms !important;animation-delay:0s !important;animation-iteration-count:1 !important;
+}
+body.lite .page-bg{filter:blur(14px) !important;}                 /* a far cheaper blur for the backdrop */
+body.lite #list.has-sticky{-webkit-mask-image:none;mask-image:none;}
+body.lite .tour-spot{box-shadow:0 0 0 2px var(--accent),0 0 0 100vmax rgba(4,5,9,.72) !important;}
+body.lite .spinner{animation-duration:.8s !important;animation-iteration-count:infinite !important;}
+
+/* the one-time offer of Lite mode */
+.perf-nudge{
+  position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:9000;
+  display:flex;align-items:center;gap:18px;max-width:min(640px,calc(100vw - 32px));padding:14px 18px;
+  border-radius:var(--radius);background:var(--panel);border:1px solid var(--accent-soft2);color:var(--text);
+  box-shadow:0 16px 44px rgba(0,0,0,.6);
+}
+.perf-text{display:flex;flex-direction:column;gap:3px;font-size:13px;line-height:1.45;color:var(--text-dim);}
+.perf-text b{color:var(--text);font-size:14px;}
+.perf-actions{display:flex;gap:8px;flex:none;}
+
+/* =====================================================================
+   What's new / changelog window
+   ===================================================================== */
+.wn-modal{width:min(600px,100%);}
+.wn-modal .modal-body{padding:4px 22px 6px;}
+.wn-release{padding:14px 0 6px;}
+.wn-release + .wn-release{border-top:1px solid var(--border);margin-top:8px;}
+.wn-modal .wn-release h4{margin:0 0 10px;font-size:14px;letter-spacing:0;text-transform:none;color:var(--text);}
+.wn-modal .wn-release h4 small{margin-left:8px;font-size:12.5px;font-weight:600;color:var(--text-dim);}
+.wn-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px;}
+.wn-list li{display:flex;gap:10px;align-items:baseline;font-size:13.5px;line-height:1.5;color:var(--text);}
+.wn-tag{
+  flex:none;min-width:72px;box-sizing:border-box;text-align:center;padding:2px 9px;border-radius:999px;
+  font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-soft2);
+}
+.wn-tag.wn-improved{color:var(--text);background:color-mix(in srgb,var(--text) 9%,transparent);border-color:var(--border);}
+.wn-tag.wn-fixed{color:#7dd3a8;background:rgba(125,211,168,.12);border-color:rgba(125,211,168,.35);}
+.wn-foot{display:flex;justify-content:flex-end;padding:12px 22px 18px;}
