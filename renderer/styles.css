@@ -2135,3 +2135,11 @@ body.glassy:not(.adaptive) .list-row.selected{text-shadow:none;}
 .country-rank{flex:none;width:52px;color:var(--accent);font-weight:800;font-variant-numeric:tabular-nums;}
 .country-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .country-pts{flex:none;color:var(--text-dim);font-variant-numeric:tabular-nums;}
+
+
+/* Demon List: the Classic / Platformer dropdown sits under the list, as wide as the list */
+.list-side{display:flex;flex-direction:column;gap:10px;width:320px;flex:none;min-height:0;}
+.list-side .list-col{width:auto;flex:1;min-height:0;}
+.list-side .mode-bar{margin:0;display:block;}
+.list-side .mode-bar .dd{display:block;width:100%;}
+.list-side .mode-bar .dd-btn{width:100%;justify-content:space-between;}

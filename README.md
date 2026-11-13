@@ -142,7 +142,7 @@ it again to everyone after adding big new features.
 ## Classic and Platformer
 
 The app covers both lists: Classic (`/api/aredl/...`) and Platformer (`/api/arepl/...`). The Demon List, Favourites,
-Followed levels, Personal list, Profile, Submissions, Notifications, Changelog and the Leaderboard each have a
+Followed levels, Personal list, Profile, Submissions, Changelog and the Leaderboard each have a
 Classic / Platformer dropdown, always starting on Classic. The Leaderboard also has a Players / Countries dropdown;
 clicking a country (or a flag) opens it in the Profile tab (`/api/aredl/country/{id}`, or `arepl` for platformer).
 Favourites, followed levels and personal-list entries remember which list they belong to (`mode`); older ones count as Classic.

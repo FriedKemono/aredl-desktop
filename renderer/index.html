@@ -97,12 +97,6 @@
 
     <section class="tab active" id="tab-list">
       <div class="tab-header">
-        <div class="mode-bar">
-          <select id="listMode" class="mode-select" aria-label="Which list">
-            <option value="classic">Classic</option>
-            <option value="platformer">Platformer</option>
-          </select>
-        </div>
         <div class="controls">
           <div class="search-wrap">
             <input id="search" type="text" placeholder="Search levels" autocomplete="off">
@@ -145,7 +139,15 @@
       </div>
       <div id="listState" class="state"><div class="spinner"></div>Fetching live data…</div>
       <div class="list-layout" id="listLayout" hidden>
-        <div class="list-col" id="list"></div>
+        <div class="list-side">
+          <div class="list-col" id="list"></div>
+          <div class="mode-bar">
+            <select id="listMode" class="mode-select" aria-label="Which list">
+              <option value="classic">Classic</option>
+              <option value="platformer">Platformer</option>
+            </select>
+          </div>
+        </div>
         <div class="list-sticky-label" id="listStickyLabel"><span></span></div>
         <div class="detail-col" id="detailCol">
           <div class="detail-scroll" id="detailInner">

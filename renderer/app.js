@@ -829,7 +829,7 @@ function wireRefreshButton(id, fn) {
 const MODES = ['classic', 'platformer'];
 const modeLabel = (m) => (m === 'platformer' ? 'Platformer' : 'Classic');
 const modeStore = Object.fromEntries(MODES.map(m => [m, { levels: [], completedIds: new Set(), completionField: null, loaded: false, loading: null }]));
-const tabModes = { list: 'classic', favourites: 'classic', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'classic', notifications: 'classic', changelog: 'classic', leaderboard: 'classic' };
+const tabModes = { list: 'classic', favourites: 'classic', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'classic', changelog: 'classic', leaderboard: 'classic' };
 const levelsOf = (mode) => modeStore[mode || 'classic'].levels;
 const levelOf = (mode, levelId) => levelsOf(mode).find(l => String(l.level_id) === String(levelId));
 const anyLevel = (levelId) => levelOf('classic', levelId) || levelOf('platformer', levelId); // a level id only ever belongs to one list
@@ -5036,20 +5036,9 @@ function bumpNotifBadge(n) {
 }
 
 // API notifications and local "followed level" updates are shown as one list, newest first.
-// The account's notification feed isn't split by list, so each item is placed by what it says or the level it names;
-// anything that can't be placed shows under both Classic and Platformer.
-function notifMode(item) {
-  const blob = [item.notification_type, item.type, item.category, item.list, item.link, item.url].filter(v => typeof v === 'string').join(' ').toLowerCase();
-  if (/arepl|platformer/.test(blob)) return 'platformer';
-  if (/platformer|arepl/.test(String(item.content || item.message || item.title || '').toLowerCase())) return 'platformer';
-  const lid = item.level_id ?? (item.level && item.level.level_id) ?? (item.data && item.data.level_id) ?? (item.metadata && item.metadata.level_id);
-  if (lid != null) { const l = anyLevel(lid); if (l) return l._mode; }
-  return 'both';
-}
 function renderNotifications() {
   const el = $('#notifState');
-  const wantMode = tabModes.notifications;
-  const api = notifAll.map((item, i) => ({ item, id: notifId(item, i) })).filter(n => !clearedNotifIds.has(n.id)).filter(({ item }) => { const m = notifMode(item); return m === 'both' || m === wantMode; }).map(({ item, id }) => ({
+  const api = notifAll.map((item, i) => ({ item, id: notifId(item, i) })).filter(n => !clearedNotifIds.has(n.id)).map(({ item, id }) => ({
     id,
     text: item.content || item.message || item.title || item.body || JSON.stringify(item),
     type: item.notification_type || null,
@@ -5057,7 +5046,7 @@ function renderNotifications() {
     date: entryDate(item),
     local: false,
   }));
-  const followed = followNotifs.filter(n => (n.mode || 'classic') === wantMode).map(n => ({
+  const followed = followNotifs.map(n => ({
     id: `f:${n.id}`,
     text: `${n.level_name}: ${n.text}`,
     type: 'followed',
@@ -5478,7 +5467,6 @@ const withLevels = (mode, draw) => { draw(); if (!modeStore[mode].loaded) ensure
 addModeSelect('favourites', (m) => withLevels(m, renderFavourites));
 addModeSelect('followed', (m) => withLevels(m, renderFollowed));
 addModeSelect('personal', (m) => withLevels(m, renderPersonal));
-addModeSelect('notifications', (m) => withLevels(m, renderNotifications));
 addModeSelect('submissions', (m) => { state.submissionsLoaded = false; ensureLevels(m); loadSubmissions(); });
 addModeSelect('changelog', () => loadChangelog(true));
 addModeSelect('profile', () => profileModeChanged());

@@ -46,9 +46,9 @@
       id: 'modes',
       tab: 'list',
       target: '.mode-bar',
-      side: 'bottom',
+      side: 'right',
       title: 'Classic and Platformer',
-      body: 'This dropdown switches between the <b>Classic</b> and <b>Platformer</b> lists. Favourites, Followed levels, the Personal list, Profile, Submissions, Notifications, Changelog and the Leaderboard (which also has a Countries board) each have the same dropdown. They all start on Classic.',
+      body: 'This dropdown under the list switches between the <b>Classic</b> and <b>Platformer</b> lists. Favourites, Followed levels, the Personal list, Profile, Submissions, Changelog and the Leaderboard (which also has a Countries board) have the same dropdown. They all start on Classic.',
     },
     {
       id: 'search',
