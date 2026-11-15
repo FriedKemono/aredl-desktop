@@ -1053,7 +1053,7 @@ body.nav-editing .top-zone{min-width:130px;min-height:34px;padding:2px 6px;outli
 body.nav-editing .top-zone.drag-over{outline-color:var(--accent);background:var(--accent-soft);}
 body.nav-editing .top-nav .nav-btn{cursor:grab;}
 body.nav-editing .top-nav .nav-btn.dragging{opacity:.35;}
-@media (max-width:1000px){ .nav-edit-bar span{display:none;} }
+
 
 
 /* ---- Request rate ---- */
@@ -1234,19 +1234,6 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15);}
 
 /* ---- Corner player: free-floating, resizable from any corner ---- */
 .video-dock{will-change:transform;}
-.video-dock.mini .mp-resize{
-  display:block;position:absolute;width:18px;height:18px;z-index:3;opacity:0;transition:opacity .15s;
-}
-.video-dock.mini:hover .mp-resize,.video-dock.dragging .mp-resize{opacity:1;}
-.mp-resize::after{content:'';position:absolute;width:9px;height:9px;border-color:#fff;border-style:solid;border-width:0;filter:drop-shadow(0 0 2px rgba(0,0,0,.9));}
-.mp-resize[data-edge="tl"]{left:0;top:32px;cursor:nwse-resize;}
-.mp-resize[data-edge="tl"]::after{left:3px;top:3px;border-left-width:2px;border-top-width:2px;}
-.mp-resize[data-edge="tr"]{right:0;top:32px;cursor:nesw-resize;}
-.mp-resize[data-edge="tr"]::after{right:3px;top:3px;border-right-width:2px;border-top-width:2px;}
-.mp-resize[data-edge="bl"]{left:0;bottom:0;cursor:nesw-resize;}
-.mp-resize[data-edge="bl"]::after{left:3px;bottom:3px;border-left-width:2px;border-bottom-width:2px;}
-.mp-resize[data-edge="br"]{right:0;bottom:0;cursor:nwse-resize;}
-.mp-resize[data-edge="br"]::after{right:3px;bottom:3px;border-right-width:2px;border-bottom-width:2px;}
 
 /* ---- Background: bigger, softer, slowly drifting ---- */
 .page-bg{
@@ -1920,7 +1907,7 @@ body.nav-editing .nav-more .nav-more-panel.drag-over{outline-color:var(--accent)
 
 /* while reordering, give the zones the room: the long hint only shows on very wide windows */
 body.nav-editing .titlebar-title{display:none;}
-@media (max-width:1750px){ .nav-edit-bar span{display:none;} }
+
 
 
 /* Runs section: title + its own sort menu, then the table (no Completions column) */
@@ -2060,18 +2047,6 @@ body.glassy:not(.adaptive) .list-row.selected{text-shadow:none;}
 .mp-btn:hover{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
 .mp-btn:active{transform:scale(.92);}
 .mp-btn svg{width:13px;height:13px;}
-.video-dock.mini .mp-resize{width:22px;height:22px;}
-.mp-resize::after{
-  width:13px;height:13px;border-color:var(--accent);border-width:0;filter:drop-shadow(0 0 4px var(--accent-soft2));opacity:.95;
-  transition:border-color .12s,transform .12s;
-}
-.mp-resize:hover::after{border-color:var(--text);}
-.mp-resize[data-edge="tl"]{top:38px;}
-.mp-resize[data-edge="tr"]{top:38px;}
-.mp-resize[data-edge="tl"]::after{left:5px;top:5px;border-left-width:3px;border-top-width:3px;border-top-left-radius:7px;}
-.mp-resize[data-edge="tr"]::after{right:5px;top:5px;border-right-width:3px;border-top-width:3px;border-top-right-radius:7px;}
-.mp-resize[data-edge="bl"]::after{left:5px;bottom:5px;border-left-width:3px;border-bottom-width:3px;border-bottom-left-radius:7px;}
-.mp-resize[data-edge="br"]::after{right:5px;bottom:5px;border-right-width:3px;border-bottom-width:3px;border-bottom-right-radius:7px;}
 
 /* =====================================================================
    Packs: a normal card with the tier shown as an accent, not a coloured slab behind the text
@@ -2202,3 +2177,85 @@ body.lite .spinner{animation-duration:.8s !important;animation-iteration-count:i
 .wn-tag.wn-improved{color:var(--text);background:color-mix(in srgb,var(--text) 9%,transparent);border-color:var(--border);}
 .wn-tag.wn-fixed{color:#7dd3a8;background:rgba(125,211,168,.12);border-color:rgba(125,211,168,.35);}
 .wn-foot{display:flex;justify-content:flex-end;padding:12px 22px 18px;}
+
+
+/* Reordering: the hint no longer sits in the top bar - it floats at the bottom of the window instead */
+body.nav-editing .nav-edit-bar{
+  position:fixed;left:50%;bottom:22px;top:auto;transform:translateX(-50%);z-index:10005;margin:0;
+  max-width:min(720px,calc(100vw - 32px));padding:10px 12px 10px 18px;white-space:normal;
+  border-radius:999px;background:var(--panel);border:1px solid var(--accent-soft2);color:var(--text-dim);
+  box-shadow:0 16px 44px rgba(0,0,0,.6);font-size:12.5px;line-height:1.4;-webkit-app-region:no-drag;
+}
+body.nav-editing .nav-edit-bar span{display:inline;}
+body.nav-editing .nav-more-btn{cursor:grab;}
+.nav-more.dragging{opacity:.45;}
+#navReorderBtn:disabled{opacity:.4;cursor:not-allowed;}
+
+/* the tour's recommendation, in red */
+.tour-rec{display:block;margin-top:10px;color:#ff5a5a;font-weight:700;}
+
+/* the country page scrolls on its own (the profile page clips its overflow) */
+.profile-page.country-page{overflow-y:auto;padding-right:6px;}
+
+
+/* =====================================================================
+   Shader backdrop (the Image / Shader setting)
+   ===================================================================== */
+.shader-bg{
+  position:fixed;left:-90px;top:-90px;width:calc(100% + 180px);height:calc(100% + 180px);z-index:0;pointer-events:none;display:none;
+  filter:blur(calc(var(--bg-blur,60px) * .5)) brightness(var(--bg-bright,.32)) saturate(calc(1.1 * var(--sh-int,1)));
+}
+body.glassy .shader-bg{filter:blur(calc(var(--bg-blur,54px) * .5)) brightness(var(--bg-bright,.5)) saturate(calc(1.5 * var(--sh-int,1)));}
+body.bg-shader .shader-bg{display:block;}
+body.bg-shader .page-bg{display:none;}
+body.no-bg .shader-bg,body.lite .shader-bg{display:none;}
+.dd-item.disabled{opacity:.38;cursor:not-allowed;pointer-events:none;}
+
+
+/* ---- Reordering: the floating copy of the tab, the drop line, and a steadier editing mode ---- */
+body.nav-editing .top-nav .nav-btn,body.nav-editing .nav-more-btn{touch-action:none;user-select:none;-webkit-user-drag:none;}
+body.nav-dragging,body.nav-dragging *{cursor:grabbing !important;user-select:none !important;}
+.nav-ghost{position:fixed !important;left:0;top:0;flex:none !important;display:flex;pointer-events:none;z-index:10006;margin:0;
+  opacity:.95;border-radius:999px;background:var(--panel);box-shadow:0 0 0 1.5px var(--accent),0 10px 28px rgba(0,0,0,.55);}
+.nav-ghost .nav-btn,.nav-ghost .nav-more-btn{color:var(--accent);}
+.nav-drop-marker{position:fixed;display:none;z-index:10006;pointer-events:none;border-radius:2px;background:var(--accent);box-shadow:0 0 8px var(--accent);}
+body.nav-editing .top-nav .nav-btn:active,body.nav-editing .nav-more-btn:active{transform:none;}
+
+
+/* ---- Shader sliders: shown only while the Shader backdrop is chosen ---- */
+#shaderOptions:not([hidden]){display:contents;}
+#shaderOptions > .setting-line{border-top:1px solid var(--border);}
+
+/* ---- Sliders: the value is one tidy pill right beside the slider, in the app's own font ---- */
+.slider-wrap output,
+.setting-line.slider-line .slider-wrap output{
+  flex:none;min-width:62px;width:auto;padding:5px 12px;border-radius:999px;text-align:center;
+  font-family:var(--font);font-size:13px;font-weight:600;line-height:1.25;letter-spacing:0;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+  color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-soft2);
+}
+
+/* ---- Corner player: the resize corners sit on the player's real corners, outside it, following its rounded shape ---- */
+.video-dock.mini{overflow:visible;}
+.video-dock.mini iframe{border-radius:calc(var(--radius) - 1px);}
+.video-dock.mini .mp-bar{border-radius:calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;}
+.video-dock.mini .mp-resize{
+  display:block;position:absolute;z-index:3;opacity:0;transition:opacity .15s;
+  width:calc(var(--radius) + 22px);height:calc(var(--radius) + 22px);
+}
+.video-dock.mini:hover .mp-resize,.video-dock.dragging .mp-resize{opacity:1;}
+/* each corner is an L-shaped grab area (so it never covers the buttons on the bar), with a rounded arc that
+   follows the player's own corner, a few pixels out from it */
+.mp-resize::after{
+  content:'';position:absolute;inset:0;pointer-events:none;border:0 solid var(--accent);
+  transition:border-color .12s;
+}
+.mp-resize:hover::after{border-color:var(--text);}
+.mp-resize[data-edge="tl"]{left:-6px;top:-6px;cursor:nwse-resize;clip-path:polygon(0 0,100% 0,100% 12px,12px 12px,12px 100%,0 100%);}
+.mp-resize[data-edge="tr"]{right:-6px;top:-6px;cursor:nesw-resize;clip-path:polygon(0 0,100% 0,100% 100%,calc(100% - 12px) 100%,calc(100% - 12px) 12px,0 12px);}
+.mp-resize[data-edge="bl"]{left:-6px;bottom:-6px;cursor:nesw-resize;clip-path:polygon(0 0,12px 0,12px calc(100% - 12px),100% calc(100% - 12px),100% 100%,0 100%);}
+.mp-resize[data-edge="br"]{right:-6px;bottom:-6px;cursor:nwse-resize;clip-path:polygon(100% 0,100% 100%,0 100%,0 calc(100% - 12px),calc(100% - 12px) calc(100% - 12px),calc(100% - 12px) 0);}
+.mp-resize[data-edge="tl"]::after{border-left-width:3px;border-top-width:3px;border-top-left-radius:calc(var(--radius) + 5px);}
+.mp-resize[data-edge="tr"]::after{border-right-width:3px;border-top-width:3px;border-top-right-radius:calc(var(--radius) + 5px);}
+.mp-resize[data-edge="bl"]::after{border-left-width:3px;border-bottom-width:3px;border-bottom-left-radius:calc(var(--radius) + 5px);}
+.mp-resize[data-edge="br"]::after{border-right-width:3px;border-bottom-width:3px;border-bottom-right-radius:calc(var(--radius) + 5px);}

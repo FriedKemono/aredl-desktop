@@ -32,16 +32,19 @@
       </div>
       <div class="top-zone right" id="topNavRight"></div>
     </nav>
-    <div class="nav-edit-bar" id="navEditBar">
-      <span id="navEditHint">Drag tabs to rearrange - drop them on the left or right side</span>
-      <button class="btn" id="navEditDone">Done</button>
-    </div>
     <div class="titlebar-status" id="topStatus"></div>
   </div>
 </div>
 
+<!-- the reorder bar lives outside the title bar: a glass title bar would trap (and clip) anything fixed inside it -->
+<div class="nav-edit-bar" id="navEditBar">
+  <span id="navEditHint">Drag a tab to move it</span>
+  <button class="btn" id="navEditDone">Done</button>
+</div>
+
 <div class="page-bg" id="pageBg"></div>
 <div class="page-bg" id="pageBg2"></div>
+<canvas class="shader-bg" id="shaderBg" aria-hidden="true"></canvas>
 
 <div class="app">
   <nav class="sidebar">
@@ -451,7 +454,32 @@
             </div>
           </div>
           <div class="setting-line">
-            <div class="setting-label"><strong>Backdrop</strong><small>The blurred picture of the level you last looked at.</small></div>
+            <div class="setting-label"><strong>Backdrop style</strong><small id="bgStyleNote">Image is a blurred picture of the level you last looked at. Shader turns that picture’s colours into soft floating bubbles.</small></div>
+            <select id="bgStyleSelect">
+              <option value="image">Image</option>
+              <option value="shader">Shader</option>
+            </select>
+          </div>
+          <div id="shaderOptions" hidden>
+            <div class="setting-line slider-line">
+              <div class="setting-label"><strong>Shader speed</strong><small>How fast the bubbles drift. At 0% they stand still, and the shader stops using any processing power. The mark is the default (100%).</small></div>
+              <div class="slider-wrap">
+                <input type="range" id="shaderSpeedSlider" min="0" max="400" step="5" data-suffix="%" data-default="100">
+                <output id="shaderSpeedOut"></output>
+                <button class="btn btn-ghost small-btn" id="shaderSpeedReset">Reset</button>
+              </div>
+            </div>
+            <div class="setting-line slider-line">
+              <div class="setting-label"><strong>Shader intensity</strong><small>How strongly the colours show. Lower is a calmer, darker wash; higher is richer and more vivid. The mark is the default (100%).</small></div>
+              <div class="slider-wrap">
+                <input type="range" id="shaderIntensitySlider" min="10" max="200" step="5" data-suffix="%" data-default="100">
+                <output id="shaderIntensityOut"></output>
+                <button class="btn btn-ghost small-btn" id="shaderIntensityReset">Reset</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Backdrop</strong><small>The level backdrop, in whichever style is chosen above.</small></div>
             <div class="toggle-stack">
               <label class="checkbox-wrap"><input type="checkbox" id="bgShow"> Show it</label>
               <label class="checkbox-wrap"><input type="checkbox" id="bgDrift"> Let it drift slowly</label>

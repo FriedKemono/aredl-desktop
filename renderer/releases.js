@@ -7,6 +7,37 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
+    version: '1.0.8',
+    title: 'Shader controls, tidier sliders and a steadier corner player',
+    items: [
+      ['new', 'Shader speed and Shader intensity sliders (Settings → Background, shown while the Shader backdrop is chosen). At 0% speed the bubbles stand still and the shader stops using any processing power.'],
+      ['fixed', 'The Background blur slider now works with the Shader backdrop. It had no effect before.'],
+      ['fixed', 'Reordering tabs is smooth now. Drag a tab and a line shows exactly where it will land; nothing jumps around while you drag, and letting go in the gap between the left and right sides works.'],
+      ['fixed', 'The Done button always shows while you reorder tabs (it was getting hidden behind the glass title bar). Reorder tabs in Settings also turns into Done, and Esc still finishes too.'],
+      ['fixed', 'When Videos is not set to “Move it to a corner player”, the video no longer lingers on screen for a moment after you leave its page.'],
+      ['fixed', 'Every slider’s value (like 20%) now sits in a tidy pill right beside the slider, in the app’s own font, instead of floating off to the side in a different one.'],
+      ['improved', 'The corner player’s resize handles now sit on the player’s actual corners, outside it, following its rounded shape. You can also resize by dragging up or down, not only sideways.'],
+      ['improved', 'The dates slider now applies to the Personal list too: “Days since” shows 12.37 days (or 12.4, or 12) to match.'],
+      ['improved', 'Drop a tab straight onto the ⋯ button to tuck it into the menu. Pressing Esc mid-drag cancels just that move.'],
+      ['improved', 'Faster and lighter: dragging a slider no longer rewrites your settings file dozens of times a second, and the shader draws fewer frames and goes completely idle when nothing is moving.'],
+    ],
+  },
+  {
+    version: '1.0.7',
+    title: 'Creators, shader backdrop and tidier tabs',
+    items: [
+      ['new', 'Creators on every level, right under Verifier. In multi-select they load automatically (once per level) and are highlighted just like verifiers.'],
+      ['new', 'Backdrop style (Settings → Background): choose the classic blurred Image or a new Shader, which turns the level picture’s colours (50 or so regions, each averaged) into soft floating bubbles. The Shader is greyed out in Lite mode, and “Let it drift slowly” is always on with it.'],
+      ['new', 'Favourites and Submissions now have an All option next to Classic and Platformer, and start on it.'],
+      ['new', 'In Notifications, level names are links that take you to that level.'],
+      ['improved', 'Back and Forward now remember the Classic / Platformer choice on every page (and the Players / Countries board, and which country you were viewing).'],
+      ['improved', 'Reordering tabs: the hint now floats at the bottom of the window instead of using up top bar space, and the ⋯ menu button can be dragged like any tab. The side bar can no longer be reordered.'],
+      ['improved', 'The app tour now goes left to right through the Demon List, recommends itself in red, and keeps its right-click menu open while you read.'],
+      ['improved', 'Favourite cards now show each level’s points and tags, as they were meant to.'],
+      ['fixed', 'Country pages in the Profile tab can scroll.'],
+    ],
+  },
+  {
     version: '1.0.6',
     title: 'Smoother on slower computers',
     items: [

@@ -158,3 +158,9 @@ Settings → About → View changelog), the notes on the GitHub release, and the
 
 The Demon List only draws the rows on screen. Settings → Appearance → **Performance → Lite** turns off blur,
 shadows and animations for slower computers, and the app offers it once if scrolling looks slow.
+
+## Creators, backdrop styles
+
+`GET /levels/{id}/creators` (or `/arepl/...`) fills the **Creator(s)** row under Verifier, and is loaded automatically for every
+level in a multi-select (each level is only asked once per session). Settings → Background → **Backdrop style** switches between the
+blurred Image and the **Shader** (48 averaged colour regions drawn as drifting bubbles; unavailable in Lite mode).

@@ -31,7 +31,7 @@
     {
       id: 'welcome',
       title: 'Welcome to AREDL Desktop',
-      body: 'A quick tour of what the app can do. Use the buttons or <kbd>←</kbd> <kbd>→</kbd>, and <kbd>Esc</kbd> to skip. You can replay it any time from <b>Settings → About</b>.',
+      body: 'A quick tour of what the app can do. Use the buttons or <kbd>←</kbd> <kbd>→</kbd>, and <kbd>Esc</kbd> to skip. You can replay it any time from <b>Settings → About</b>.<span class="tour-rec">We recommend taking this tour: it only takes a minute and shows features that are easy to miss.</span>',
     },
     {
       id: 'tabs',
@@ -43,12 +43,25 @@
         + (navTop() && q('#navMore') && !q('#navMore').hidden ? ' Tabs you tuck away sit behind the <b>⋯</b> button.' : ''),
     },
     {
+      id: 'list',
+      tab: 'list',
+      needsLevels: true,
+      before: async () => {
+        await waitFor(() => q('#list .list-row'));
+        if (state.selectedId == null && state.filtered && state.filtered[0] && typeof selectLevel === 'function') selectLevel(state.filtered[0]);
+      },
+      target: '.list-col',
+      side: 'right',
+      title: 'The list',
+      body: 'Click a level to open its video, details and records on the right. When you’re signed in with your API key, levels you’ve beaten get a ✓.',
+    },
+    {
       id: 'modes',
       tab: 'list',
       target: '.mode-bar',
       side: 'right',
       title: 'Classic and Platformer',
-      body: 'This dropdown under the list switches between the <b>Classic</b> and <b>Platformer</b> lists. Favourites, Followed levels, the Personal list, Profile, Submissions, Changelog and the Leaderboard (which also has a Countries board) have the same dropdown. They all start on Classic.',
+      body: 'This dropdown under the list switches between the <b>Classic</b> and <b>Platformer</b> lists. Favourites, Followed levels, the Personal list, Profile, Submissions, Changelog and the Leaderboard (which also has a Countries board) have the same dropdown. They start on Classic, except Favourites and Submissions, which also have an <b>All</b> option and start on it.',
     },
     {
       id: 'search',
@@ -65,19 +78,6 @@
       side: 'bottom',
       title: 'Narrow it down',
       body: 'The <b>tag</b> button includes or excludes tags (green = must have, red = must not). The status menu starts on <b>All statuses</b>, and you can sort by position, points or A–Z.',
-    },
-    {
-      id: 'list',
-      tab: 'list',
-      needsLevels: true,
-      before: async () => {
-        await waitFor(() => q('#list .list-row'));
-        if (state.selectedId == null && state.filtered && state.filtered[0] && typeof selectLevel === 'function') selectLevel(state.filtered[0]);
-      },
-      target: '.list-col',
-      side: 'right',
-      title: 'The list',
-      body: 'Click a level to open its video, details and records on the right. When you’re signed in with your API key, levels you’ve beaten get a ✓.',
     },
     {
       id: 'tools',

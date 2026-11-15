@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('aredl', {
   getCountry: (id, mode) => ipcRenderer.invoke('api:getCountry', id, mode),
   getProfile: (id, mode) => ipcRenderer.invoke('api:getProfile', id, mode),
   getLevelDetail: (levelId, mode) => ipcRenderer.invoke('api:getLevelDetail', levelId, mode),
+  getLevelCreators: (levelId, mode) => ipcRenderer.invoke('api:getLevelCreators', levelId, mode),
   getLevelHistory: (levelId, mode) => ipcRenderer.invoke('api:getLevelHistory', levelId, mode),
   getLevelRecords: (levelId, mode) => ipcRenderer.invoke('api:getLevelRecords', levelId, mode),
   getLevelRecordsPage: (levelId, page, mode) => ipcRenderer.invoke('api:getLevelRecordsPage', levelId, page, mode),

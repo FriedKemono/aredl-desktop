@@ -20,16 +20,25 @@ if (!releases.some(r => r.version === version)) {
 }
 
 try {
-  if (!fs.existsSync(path.join(root, '.git'))) {
+  // "connected" means: a git repo whose branch tracks origin/main on GitHub. A folder can have a .git and still not be
+  // (for example after an interrupted first attempt), so check the real thing rather than just the folder.
+  const hasRepo = fs.existsSync(path.join(root, '.git'));
+  let connected = false;
+  if (hasRepo) { try { out('git rev-parse --abbrev-ref --symbolic-full-name @{u}'); connected = true; } catch { /* no upstream */ } }
+  if (!connected) {
     const { owner, repo } = (pkg.build && pkg.build.publish) || {};
     if (!owner || !repo || /YOUR_/.test(owner + repo)) {
       console.error('package.json still has placeholder GitHub names under build.publish. Fill those in first.');
       process.exit(1);
     }
+    const url = `https://github.com/${owner}/${repo}.git`;
     console.log(`This folder isn't connected to GitHub yet - connecting it to ${owner}/${repo} (your files stay as they are)...`);
-    run('git init');
+    if (!hasRepo) run('git init');
     run('git branch -M main');
-    run(`git remote add origin https://github.com/${owner}/${repo}.git`);
+    let current = '';
+    try { current = out('git remote get-url origin'); } catch { /* no origin yet */ }
+    if (!current) run(`git remote add origin ${url}`);
+    else if (current !== url) run(`git remote set-url origin ${url}`);
     run('git fetch origin --tags');
     run('git reset origin/main');                       // takes on the repo's history, keeps the files in this folder
     run('git branch --set-upstream-to=origin/main main');

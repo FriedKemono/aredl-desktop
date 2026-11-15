@@ -70,6 +70,7 @@ const apiPrefix = (mode) => (mode === 'platformer' ? 'arepl' : 'aredl');
 const ENDPOINTS = {
   levels: (mode) => `${API_BASE}/${apiPrefix(mode)}/levels/?exclude_pending=false&exclude_removed=false`,
   levelDetail: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}`, // confirmed by user
+  levelCreators: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/creators`, // confirmed by user
   levelHistory: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/history`, // confirmed by user
   levelRecords: (levelId, page, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/records?page=${page}`, // confirmed endpoint, page param follows the same convention as changelog
   submissions: (mode) => `${API_BASE}/${apiPrefix(mode)}/submissions/@me`, // confirmed by user
@@ -507,6 +508,7 @@ ipcMain.handle('api:getProfile', async (_e, id, mode) => apiFetch(ENDPOINTS.prof
 
 ipcMain.handle('api:getLevelDetail', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelDetail(levelId, mode)));
 
+ipcMain.handle('api:getLevelCreators', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelCreators(levelId, mode)));
 ipcMain.handle('api:getLevelHistory', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelHistory(levelId, mode)));
 
 // One page of records at a time - the renderer drives the paging so it can show

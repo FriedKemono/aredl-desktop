@@ -104,6 +104,7 @@ function showTab(name) {
   if (name !== 'list') abortRecords(); // stop fetching records for a level you're no longer looking at
   else renderRecordsFooter();
   pauseAllVideos(); // whatever was playing on the tab we're leaving is no longer visible
+  try { [...docks].forEach(d => d.layout()); } catch { /* players not set up yet */ } // hide / move players now, not a frame later
   if (name === 'changelog' && !state.changelogLoaded) loadChangelog(true);
   if (name === 'notifications' && !state.notifLoaded) loadNotifications();
   if (name === 'submissions' && !state.submissionsLoaded) loadSubmissions();
@@ -146,7 +147,9 @@ function currentNavSnapshot() {
   const tab = document.querySelector('.nav-btn.active')?.dataset.tab || 'list';
   return {
     tab,
-    mode: tab === 'list' ? tabModes.list : null,
+    mode: tabModes[tab] ?? null, // the Classic / Platformer / All choice on this page
+    board: tab === 'leaderboard' ? lbState.board : null,
+    country: tab === 'profile' ? (state.currentCountryId ?? null) : null,
     levelId: tab === 'list' ? (state.selectedId ?? null) : null,
     range: tab === 'list' && state.multi.size >= 2 ? [...state.multi] : null,
     profile: tab === 'profile' ? (state.currentProfileId ?? null) : null,
@@ -158,6 +161,8 @@ function sameNav(a, b) {
   if (!a || !b) return false;
   return a.tab === b.tab
     && (a.mode ?? null) === (b.mode ?? null)
+    && (a.board ?? null) === (b.board ?? null)
+    && (a.country ?? null) === (b.country ?? null)
     && rangeKey(a.range) === rangeKey(b.range)
     && (a.levelId ?? null) === (b.levelId ?? null)
     && (a.profile ?? null) === (b.profile ?? null)
@@ -165,7 +170,7 @@ function sameNav(a, b) {
 }
 // The app keeps its own history list rather than the browser's, so back/forward
 // (mouse side buttons, Alt+Left/Right) behave the same however the OS delivers them.
-const navStack = [{ tab: 'list', levelId: null, profile: null, submission: null }];
+const navStack = [{ tab: 'list', mode: 'classic', levelId: null, profile: null, submission: null }];
 let navIndex = 0;
 
 function recordNav() {
@@ -216,6 +221,12 @@ function restoreNav(nav) {
   try {
     showTab(nav.tab);
     if (nav.tab === 'list' && nav.mode && nav.mode !== tabModes.list) switchListMode(nav.mode); // synchronous when that list is already loaded
+    // every other page remembers its own Classic / Platformer / All choice too
+    if (nav.tab !== 'list' && nav.mode && tabModes[nav.tab] !== undefined && nav.mode !== tabModes[nav.tab]) {
+      setTabMode(nav.tab, nav.mode, { push: false, quiet: nav.tab === 'profile' }); // (the profile reloads below)
+      if (nav.tab === 'profile') { state.currentProfileId = null; state.currentCountryId = null; } // force that reload
+    }
+    if (nav.tab === 'leaderboard' && nav.board && nav.board !== lbState.board) setLbBoard(nav.board, { push: false });
     if (nav.tab === 'list' && nav.range && nav.range.length >= 2 && restoreRange(nav)) {
       // level range restored (which level of it was on screen, too)
     } else if (nav.tab === 'list' && nav.levelId != null) {
@@ -225,7 +236,8 @@ function restoreNav(nav) {
         scrollListNearest(level.id);
       }
     } else if (nav.tab === 'profile') {
-      restoreProfileView(nav.profile ?? null);
+      if (nav.country != null) { if (String(state.currentCountryId) !== String(nav.country)) lookupCountry(nav.country); }
+      else restoreProfileView(nav.profile ?? null);
     } else if (nav.tab === 'submissions') {
       restoreSubmissionView(nav.submission ?? null);
     }
@@ -357,8 +369,27 @@ function formatRelativeTime(date) {
 // not localStorage - the renderer's origin has a random port, so localStorage
 // would be wiped on every launch.
 let appSettings = {};
+// Sliders fire dozens of times a second while you drag them; writing settings.json on every tick is wasted work,
+// so these keys are gathered up and written once the handle settles (everything else is still saved straight away).
+const SOFT_SETTING_KEYS = new Set(['radius', 'bgBlur', 'bgBright', 'adaptiveTint', 'dateDp', 'shaderSpeed', 'shaderIntensity']);
+let softPatch = null, softTimer = null;
+function flushSoftSettings() {
+  clearTimeout(softTimer); softTimer = null;
+  if (!softPatch) return;
+  const patch = softPatch; softPatch = null;
+  try { Promise.resolve(window.aredl.setSettings(patch)).catch(() => {}); } catch { /* keep the in-memory value for this session */ }
+}
+window.addEventListener('beforeunload', flushSoftSettings);
+window.addEventListener('pagehide', flushSoftSettings);
+window.addEventListener('blur', flushSoftSettings);
 async function setSetting(key, value) {
   appSettings[key] = value;
+  if (SOFT_SETTING_KEYS.has(key)) {
+    softPatch = Object.assign(softPatch || {}, { [key]: value });
+    clearTimeout(softTimer);
+    softTimer = setTimeout(flushSoftSettings, 160);
+    return;
+  }
   try { await window.aredl.setSettings({ [key]: value }); } catch { /* keep the in-memory value for this session */ }
 }
 
@@ -466,13 +497,15 @@ function navLabel(btn) {
 const navBtnOf = (tab) => NAV_BTNS.find(b => b.dataset.tab === tab);
 
 // Which tabs sit on the left / right of the top bar. Unknown or new tabs go to the left.
+const MENU_TOKEN = '__menu__'; // where the ⋯ menu button sits among the tabs
 function currentNavLayout() {
   const tabs = NAV_BTNS.map(b => b.dataset.tab);
   const saved = appSettings.navLayout;
   let left = [], right = [], menu = [];
+  const known = (t) => tabs.includes(t) || t === MENU_TOKEN;
   if (saved && Array.isArray(saved.left) && Array.isArray(saved.right)) {
-    left = saved.left.filter(t => tabs.includes(t));
-    right = saved.right.filter(t => tabs.includes(t));
+    left = saved.left.filter(known);
+    right = saved.right.filter(known);
     menu = (Array.isArray(saved.menu) ? saved.menu : []).filter(t => tabs.includes(t));
   } else {
     right = ['settings'];
@@ -480,12 +513,18 @@ function currentNavLayout() {
   right = right.filter(t => !menu.includes(t));
   left = left.filter(t => !right.includes(t) && !menu.includes(t));
   tabs.forEach(t => { if (!left.includes(t) && !right.includes(t) && !menu.includes(t)) left.push(t); });
+  // exactly one menu button; if it was never placed it goes at the end of the left side (where it always was)
+  const once = (arr) => arr.filter((t, i) => t !== MENU_TOKEN || arr.indexOf(t) === i);
+  left = once(left); right = once(right);
+  if (left.includes(MENU_TOKEN)) right = right.filter(t => t !== MENU_TOKEN);
+  if (!left.includes(MENU_TOKEN) && !right.includes(MENU_TOKEN)) left.push(MENU_TOKEN);
   return { left, right, menu };
 }
 function saveNavLayout() {
-  const names = (zone) => [...zone.querySelectorAll('.nav-btn')].map(b => b.dataset.tab);
+  // direct children only: the menu button's own dropdown holds tabs too
+  const names = (zone) => [...zone.children].map(c => c.classList.contains('nav-btn') ? c.dataset.tab : (c.id === 'navMore' ? MENU_TOKEN : null)).filter(Boolean);
   // with the menu button switched off its tabs sit in the bar, so keep remembering which ones were in the menu
-  const menu = appSettings.navMenu ? names($('#topNavMenu')) : ((appSettings.navLayout && appSettings.navLayout.menu) || []);
+  const menu = appSettings.navMenu ? [...$('#topNavMenu').children].filter(c => c.classList.contains('nav-btn')).map(c => c.dataset.tab) : ((appSettings.navLayout && appSettings.navLayout.menu) || []);
   setSetting('navLayout', { left: names($('#topNavLeft')), right: names($('#topNavRight')), menu });
 }
 
@@ -500,7 +539,10 @@ function applyNavPlacement() {
   if (top) {
     const { left, right, menu } = currentNavLayout();
     const menuOn = !!appSettings.navMenu;
-    const place = (t, zone) => { const b = navBtnOf(t); b.title = navLabel(b); zone.appendChild(b); };
+    const place = (t, zone) => {
+      if (t === MENU_TOKEN) { zone.appendChild($('#navMore')); return; }
+      const b = navBtnOf(t); b.title = navLabel(b); zone.appendChild(b);
+    };
     (menuOn ? left : left.concat(menu)).forEach(t => place(t, $('#topNavLeft')));
     right.forEach(t => place(t, $('#topNavRight')));
     if (menuOn) menu.forEach(t => place(t, $('#topNavMenu')));
@@ -512,7 +554,12 @@ function applyNavPlacement() {
     });
     sidebar.appendChild(navBtnOf('settings'));
     sidebar.appendChild(status);
+    $('#topNav').insertBefore($('#navMore'), $('#topNavRight')); // the menu button goes home (and stays hidden)
   }
+  // reordering only exists for the top bar: the side bar is a plain list of tabs
+  const reorder = $('#navReorderBtn');
+  reorder.disabled = !top;
+  reorder.title = top ? '' : 'Turn on “Tabs in the top bar” to reorder tabs';
   updateNavCompact();
   syncNavMore();
 }
@@ -633,56 +680,152 @@ $('#navCompactSelect').addEventListener('change', () => {
   updateNavCompact();
 });
 
-// ---- Reordering the top bar (drag a tab; drop it on the left or right side) ----
-let draggingNav = null;
+// ---- Reordering the top bar ----
+// Pointer-based (not the browser's drag-and-drop, which is unreliable in a window with a custom title bar):
+// press a tab, drag it, and a line shows exactly where it will land. Nothing moves until you let go.
+const navDrag = { item: null, pointerId: null, startX: 0, startY: 0, started: false, ghost: null, marker: null, offX: 0, offY: 0, target: null };
+const navIsEditing = () => document.body.classList.contains('nav-editing');
+const navKids = (zone, skip) => [...zone.children].filter(c => (c.classList.contains('nav-btn') || c.id === 'navMore') && c !== skip);
+
 function setNavEditing(on) {
+  // only the top bar can be reordered: in the side bar nothing becomes draggable
+  if (on && !document.body.classList.contains('nav-top')) on = false;
+  if (!on) navDragEnd(false);
   document.body.classList.toggle('nav-editing', on);
-  NAV_BTNS.forEach(b => { b.draggable = on; });
+  NAV_BTNS.forEach(b => { b.draggable = false; });
+  $('#navMoreBtn').draggable = false;
   if (on) closeNavMore();
   $('#navEditHint').textContent = appSettings.navMenu
-    ? 'Drag tabs to rearrange - drop them on the left, the right, or into the menu button'
-    : 'Drag tabs to rearrange - drop them on the left or right side';
+    ? 'Drag a tab to move it: to the other side, or onto the ⋯ menu button. You can drag the ⋯ button too.'
+    : 'Drag a tab to move it to a new spot, on the left or the right side.';
+  $('#navReorderBtn').textContent = on ? 'Done' : 'Reorder tabs';
   syncNavMore();
 }
-$('#navReorderBtn').addEventListener('click', () => setNavEditing(true));
-$('#navEditDone').addEventListener('click', () => { setNavEditing(false); showToast('Top bar saved'); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('nav-editing')) setNavEditing(false); });
+function finishNavEditing() { setNavEditing(false); showToast('Top bar saved'); }
+$('#navReorderBtn').addEventListener('click', () => { if (navIsEditing()) finishNavEditing(); else setNavEditing(true); });
+$('#navEditDone').addEventListener('click', finishNavEditing);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !navIsEditing()) return;
+  if (navDrag.item && navDrag.started) navDragEnd(false); // first Escape just cancels the move in progress
+  else setNavEditing(false);
+});
 // while editing, clicking a tab must not navigate
 document.addEventListener('click', (e) => {
-  if (document.body.classList.contains('nav-editing') && e.target.closest('.top-nav .nav-btn')) {
+  if (navIsEditing() && e.target.closest('.top-nav .nav-btn')) {
     e.stopPropagation();
     e.preventDefault();
   }
 }, true);
-document.addEventListener('dragstart', (e) => {
-  const b = e.target.closest && e.target.closest('.top-nav .nav-btn');
-  if (!b || !document.body.classList.contains('nav-editing')) return;
-  draggingNav = b;
-  b.classList.add('dragging');
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', b.dataset.tab);
-});
-document.addEventListener('dragover', (e) => {
-  const zone = e.target.closest && e.target.closest('.top-zone');
-  if (!draggingNav || !zone) return;
-  e.preventDefault();
-  document.querySelectorAll('.top-zone').forEach(z => z.classList.toggle('drag-over', z === zone));
-  const vertical = zone.dataset.axis === 'y'; // the menu is a vertical list
-  const after = [...zone.querySelectorAll('.nav-btn:not(.dragging)')].find(b => {
-    const r = b.getBoundingClientRect();
-    return vertical ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
+
+// where would the dragged item land if it were dropped at this point? { zone, before } or null
+function navFindTarget(item, x, y) {
+  const menuOn = !!appSettings.navMenu && !navMoreEl.hidden;
+  // dropping a tab right onto the ⋯ button files it at the end of the menu
+  if (menuOn && item.id !== 'navMore') {
+    const r = navMoreBtn.getBoundingClientRect();
+    if (x >= r.left - 6 && x <= r.right + 6 && y >= r.top - 6 && y <= r.bottom + 6) return { zone: $('#topNavMenu'), before: null };
+  }
+  const zones = [$('#topNavLeft'), $('#topNavRight')];
+  if (menuOn && item.id !== 'navMore') zones.push($('#topNavMenu')); // the menu button can't go inside its own menu
+  let best = null, bestD = Infinity;
+  zones.forEach(z => {
+    const r = z.getBoundingClientRect();
+    const d = Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
+    if (d < bestD) { bestD = d; best = z; }
   });
-  if (after) zone.insertBefore(draggingNav, after); else zone.appendChild(draggingNav);
-});
-document.addEventListener('drop', (e) => { if (draggingNav) e.preventDefault(); });
-document.addEventListener('dragend', () => {
-  if (!draggingNav) return;
-  draggingNav.classList.remove('dragging');
-  draggingNav = null;
+  if (!best || bestD > 120) return null; // too far from any zone: letting go here changes nothing
+  const vertical = best.dataset.axis === 'y'; // the menu is a vertical list
+  const before = navKids(best, item).find(c => {
+    const r = c.getBoundingClientRect();
+    return vertical ? y < r.top + r.height / 2 : x < r.left + r.width / 2;
+  }) || null;
+  return { zone: best, before };
+}
+function navShowMarker(t) {
+  const m = navDrag.marker;
+  document.querySelectorAll('.top-zone').forEach(z => z.classList.toggle('drag-over', !!t && z === t.zone));
+  if (!t) { m.style.display = 'none'; return; }
+  const kids = navKids(t.zone, navDrag.item);
+  const zr = t.zone.getBoundingClientRect();
+  const ref = t.before ? t.before.getBoundingClientRect() : (kids.length ? kids[kids.length - 1].getBoundingClientRect() : null);
+  let x, y, w, h;
+  if (t.zone.dataset.axis === 'y') {
+    w = zr.width - 12; h = 3; x = zr.left + 6;
+    y = !ref ? zr.top + 8 : (t.before ? ref.top - 2 : ref.bottom + 1);
+  } else {
+    w = 3; h = Math.max(20, zr.height - 8); y = zr.top + 4;
+    x = !ref ? zr.left + 8 : (t.before ? ref.left - 2 : ref.right + 1);
+  }
+  Object.assign(m.style, { display: 'block', left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+}
+function navDragStart(e) {
+  const item = navDrag.item;
+  navDrag.started = true;
+  const src = item.id === 'navMore' ? navMoreBtn : item; // the ⋯ button is dragged as just the button
+  const r = src.getBoundingClientRect();
+  navDrag.offX = navDrag.startX - r.left; navDrag.offY = navDrag.startY - r.top;
+  const ghost = document.createElement('div');
+  ghost.className = 'top-nav nav-ghost';
+  const clone = src.cloneNode(true);
+  clone.removeAttribute('id'); clone.querySelectorAll('[id]').forEach(n => n.removeAttribute('id'));
+  ghost.appendChild(clone);
+  document.body.appendChild(ghost);
+  navDrag.ghost = ghost;
+  const m = document.createElement('i');
+  m.className = 'nav-drop-marker';
+  document.body.appendChild(m);
+  navDrag.marker = m;
+  item.classList.add('dragging');
+  document.body.classList.add('nav-dragging');
+}
+function navDragMove(x, y) {
+  navDrag.ghost.style.transform = `translate(${x - navDrag.offX}px,${y - navDrag.offY}px)`;
+  navDrag.target = navFindTarget(navDrag.item, x, y);
+  navShowMarker(navDrag.target);
+}
+// drop = true: put the item where the line is. drop = false: cancel (or just clean up)
+function navDragEnd(drop) {
+  const item = navDrag.item;
+  if (!item) return;
+  const t = navDrag.target;
+  try { if (navDrag.pointerId != null) item.releasePointerCapture(navDrag.pointerId); } catch { /* already released */ }
+  if (navDrag.ghost) navDrag.ghost.remove();
+  if (navDrag.marker) navDrag.marker.remove();
+  item.classList.remove('dragging');
+  document.body.classList.remove('nav-dragging');
   document.querySelectorAll('.top-zone').forEach(z => z.classList.remove('drag-over'));
-  saveNavLayout();
-  updateNavIndicators(false);
+  Object.assign(navDrag, { item: null, pointerId: null, started: false, ghost: null, marker: null, target: null });
+  if (drop && t && !(t.before === item)) {
+    if (t.before) t.zone.insertBefore(item, t.before); else t.zone.appendChild(item);
+    saveNavLayout();
+    syncNavMore();
+    updateNavIndicators(false);
+  }
+}
+document.addEventListener('pointerdown', (e) => {
+  if (!navIsEditing() || e.button !== 0 || navDrag.item) return;
+  const tab = e.target.closest && e.target.closest('.top-nav .nav-btn');
+  const mb = !tab && e.target.closest && e.target.closest('.top-nav .nav-more-btn');
+  const item = tab || (mb && mb.closest('.nav-more'));
+  if (!item) return;
+  e.preventDefault();
+  Object.assign(navDrag, { item, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, started: false });
+  try { item.setPointerCapture(e.pointerId); } catch { /* fine without it */ }
 });
+document.addEventListener('pointermove', (e) => {
+  if (!navDrag.item || e.pointerId !== navDrag.pointerId) return;
+  if (!navDrag.started) {
+    if (Math.hypot(e.clientX - navDrag.startX, e.clientY - navDrag.startY) < 5) return; // a click isn't a drag
+    navDragStart(e);
+  }
+  navDragMove(e.clientX, e.clientY);
+});
+document.addEventListener('pointerup', (e) => {
+  if (!navDrag.item || e.pointerId !== navDrag.pointerId) return;
+  navDragEnd(navDrag.started);
+});
+document.addEventListener('pointercancel', () => navDragEnd(false));
+window.addEventListener('blur', () => navDragEnd(false));
 
 $('#videoLeaveSelect').addEventListener('change', () => setSetting('videoOnLeave', $('#videoLeaveSelect').value));
 $('#favSortBy').addEventListener('change', () => { setSetting('favSort', $('#favSortBy').value); renderFavourites(); });
@@ -694,6 +837,7 @@ $('#dateDpSlider').addEventListener('input', () => {
   // refresh anything already showing "x ago"
   try { if (changelogEntries.length) renderChangelog(); } catch { /* not loaded yet */ }
   try { renderFollowed(); } catch { /* not loaded yet */ }
+  try { renderPersonal(); } catch { /* not loaded yet */ }
   try { if (clearedNotifIds) renderNotifications(); } catch { /* not loaded yet */ }
   try { if (state.submissionsLoaded) renderSubmissions(); } catch { /* not loaded yet */ }
   try { if (document.querySelector('#historyTable, .history-table')) renderHistoryTable(); } catch { /* no history open */ }
@@ -744,6 +888,7 @@ $('#reduceMotion').addEventListener('change', () => { setSetting('reduceMotion',
 function applyPerf() {
   document.body.classList.toggle('lite', appSettings.perf === 'lite');
   $('#perfSelect').value = appSettings.perf === 'lite' ? 'lite' : 'standard';
+  applyBgToggles(); // the shader backdrop can't run in Lite mode
 }
 $('#perfSelect').addEventListener('change', () => { setSetting('perf', $('#perfSelect').value); applyPerf(); });
 
@@ -793,14 +938,28 @@ $('#bgBrightSlider').addEventListener('input', () => {
   applyBgBright();
 });
 $('#bgBrightReset').addEventListener('click', () => { setSetting('bgBright', null); applyBgBright(); });
+const BG_STYLE_NOTE = 'Image is a blurred picture of the level you last looked at. Shader turns that picture’s colours into soft floating bubbles.';
 function applyBgToggles() {
-  const show = appSettings.bgShow !== false, drift = appSettings.bgDrift !== false;
+  const show = appSettings.bgShow !== false;
+  const lite = appSettings.perf === 'lite';
+  const shaderOn = appSettings.bgStyle === 'shader' && !lite; // Lite mode can't run the shader
+  const drift = shaderOn ? true : appSettings.bgDrift !== false; // the shader is always moving
   document.body.classList.toggle('no-bg', !show);
   document.body.classList.toggle('no-drift', !drift);
+  document.body.classList.toggle('bg-shader', shaderOn);
   $('#bgShow').checked = show;
   $('#bgDrift').checked = drift;
-  $('#bgDrift').disabled = !show;
+  $('#bgDrift').disabled = !show || shaderOn;
+  $('#bgDrift').closest('label').title = shaderOn ? 'Always on with the shader backdrop' : '';
+  const style = $('#bgStyleSelect');
+  [...style.options].find(o => o.value === 'shader').disabled = lite; // greyed out in Lite mode
+  style.value = shaderOn ? 'shader' : 'image';
+  $('#bgStyleNote').textContent = lite ? 'Shader isn’t available in Lite mode.' : BG_STYLE_NOTE;
+  $('#shaderOptions').hidden = !shaderOn;
+  if (shaderOn) shaderSetVid(currentBgVid);
+  shaderKick();
 }
+$('#bgStyleSelect').addEventListener('change', () => { setSetting('bgStyle', $('#bgStyleSelect').value); applyBgToggles(); });
 $('#bgShow').addEventListener('change', () => { setSetting('bgShow', $('#bgShow').checked); applyBgToggles(); });
 $('#bgDrift').addEventListener('change', () => { setSetting('bgDrift', $('#bgDrift').checked); applyBgToggles(); });
 
@@ -815,6 +974,7 @@ function applyAppearance() {
   applyPerf();
   applyBgBright();
   applyBgToggles();
+  applyShaderTuning();
 }
 
 async function initSettings() {
@@ -865,7 +1025,7 @@ function wireRefreshButton(id, fn) {
 const MODES = ['classic', 'platformer'];
 const modeLabel = (m) => (m === 'platformer' ? 'Platformer' : 'Classic');
 const modeStore = Object.fromEntries(MODES.map(m => [m, { levels: [], completedIds: new Set(), completionField: null, loaded: false, loading: null }]));
-const tabModes = { list: 'classic', favourites: 'classic', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'classic', changelog: 'classic', leaderboard: 'classic' };
+const tabModes = { list: 'classic', favourites: 'all', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'all', changelog: 'classic', leaderboard: 'classic' }; // 'all' = both lists together (only Favourites and Submissions offer it)
 const levelsOf = (mode) => modeStore[mode || 'classic'].levels;
 const levelOf = (mode, levelId) => levelsOf(mode).find(l => String(l.level_id) === String(levelId));
 const anyLevel = (levelId) => levelOf('classic', levelId) || levelOf('platformer', levelId); // a level id only ever belongs to one list
@@ -1618,16 +1778,18 @@ async function toggleFavourite(level) {
 function renderFavourites() {
   const el = document.getElementById('favList');
   if (!el) return;
-  const mode = tabModes.favourites;
-  const mine = state.favourites.filter(f => (f.mode || 'classic') === mode);
+  const mode = tabModes.favourites; // all | classic | platformer
+  const mine = state.favourites.filter(f => mode === 'all' || (f.mode || 'classic') === mode);
   $('#favCount').textContent = mine.length ? `(${mine.length})` : '';
   if (!mine.length) {
-    el.innerHTML = `<div class="state">No ${mode === 'platformer' ? 'platformer ' : ''}favourites yet.</div>`;
+    el.innerHTML = `<div class="state">No ${mode === 'platformer' ? 'platformer ' : mode === 'classic' ? 'classic ' : ''}favourites yet.</div>`;
     return;
   }
   const rows = mine.map(f => {
-    const live = levelOf(mode, f.level_id);
+    const fm = f.mode || 'classic';
+    const live = levelOf(fm, f.level_id);
     return {
+      live, mode: fm,
       level_id: f.level_id,
       name: (live && live.name) || f.name || `Level ${f.level_id}`,
       position: live ? live.position : null,
@@ -1638,14 +1800,15 @@ function renderFavourites() {
     if (a.position == null && b.position == null) return NAME_COLLATOR.compare(a.name, b.name);
     if (a.position == null) return 1;
     if (b.position == null) return -1;
-    return a.position - b.position;
+    return (a.position - b.position) || (a.mode === b.mode ? 0 : a.mode === 'platformer' ? 1 : -1);
   });
   const cardOf = (r) => {
     const l = r.live;
     const hasPos = r.position != null;
     const pills = [];
-    const completed = state.completedIds.has(String(r.level_id));
+    const completed = modeStore[r.mode].completedIds.has(String(r.level_id));
     const lab = favLabelOf(r.label);
+    if (mode === 'all' && r.mode === 'platformer') pills.push(`<span class="fav-pill status">Platformer</span>`); // (the All view mixes both lists)
     if (r.status) pills.push(`<span class="fav-pill status">${escapeHtml(r.status)}</span>`);
     pills.push(completed
       ? `<span class="fav-pill done">✓ Completed</span>`
@@ -1665,14 +1828,14 @@ function renderFavourites() {
       ${tagHtml ? `<div class="fav-tags">${tagHtml}</div>` : ''}
       <div class="fav-card-foot">
         <span class="fav-card-id copyable" data-copy="${escapeHtml(r.level_id)}" data-copy-label="Level ID" title="Click to copy">ID ${escapeHtml(r.level_id)}</span>
-        ${levelToolsHtml({ level_id: r.level_id, name: r.name })}
+        ${levelToolsHtml({ level_id: r.level_id, name: r.name, mode: r.mode })}
       </div>
     </div>`;
   };
 
   // Sorting by list or category groups the cards under coloured headers.
   const sortMode = appSettings.favSort || 'category';
-  const isDone = (r) => modeStore[mode].completedIds.has(String(r.level_id));
+  const isDone = (r) => modeStore[r.mode].completedIds.has(String(r.level_id));
   const groupBy = (keyOf, nameOf, colorOf, order) => {
     const by = new Map();
     rows.forEach(r => { const k = keyOf(r); if (!by.has(k)) by.set(k, []); by.get(k).push(r); });
@@ -2053,6 +2216,15 @@ const plDate = (iso) => {
 };
 const plFmtDate = (iso) => { const d = plDate(iso); return d ? `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}` : '—'; };
 const plDaysSince = (iso) => { const d = plDate(iso); return d ? Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000)) : null; };
+// the same decimal precision as every other "x ago" (Settings > Dates): 0 = whole days, 1-2 = 12.4 / 12.37 days
+function plDaysText(iso) {
+  const d = plDate(iso);
+  if (!d) return '';
+  const dp = Math.min(2, Math.max(0, Number.isFinite(appSettings.dateDp) ? appSettings.dateDp : 2));
+  const raw = Math.max(0, (Date.now() - d.getTime()) / 86400000);
+  const txt = (dp === 0 ? Math.floor(raw) : raw).toFixed(dp);
+  return `${txt} ${Number(txt) === 1 ? 'Day' : 'Days'}`;
+}
 
 function plSorted() {
   const rows = plEntries().filter(plIsDone).map(e => ({ e, r: plResolve(e) }));
@@ -2184,7 +2356,7 @@ function renderPersonal() {
     const first = inProgress
       ? `<span class="pl-pct"><b>${plRunText(e)}</b></span>`
       : `<span class="pl-rank"><span class="pl-rank-wrap"><b class="rank-badge">${rank}</b>${tag ? `<span class="pl-rank-tag">(${tag})</span>` : ''}</span></span>`;
-    const dayText = days != null ? `${days} ${days === 1 ? 'Day' : 'Days'}` : '';
+    const dayText = days != null ? plDaysText(e.date) : '';
     return `<div class="pl-row${cls}${inProgress ? ' progress' : ''}"${inProgress ? ` style="--from:${plStartOf(e) ?? 0}%;--pct:${Number(e.percent)}%"` : ''}>
       ${first}
       <span class="pl-name">${r.jumpId != null ? `<a href="#" class="level-link" data-jump="${escapeHtml(String(r.jumpId))}">${escapeHtml(r.name || '—')}</a>` : escapeHtml(r.name || '—')}</span>
@@ -2670,6 +2842,15 @@ function renderLeaderboard() {
 }
 
 // First / previous / page box / next / last - shared by the players and countries boards.
+function setLbBoard(value, { push = true } = {}) {
+  lbState.board = value;
+  lbState.data = null;
+  const sel = document.getElementById('lbBoard');
+  if (sel && sel.value !== value) sel.value = value;
+  $('#lbSearch').placeholder = value === 'countries' ? 'Search countries' : 'Search this page';
+  loadLeaderboard(1);
+  if (push) pushNavState();
+}
 function renderLbPager(pages, per) {
   const p = lbState.page;
   $('#lbPager').innerHTML = pages > 1
@@ -2827,7 +3008,7 @@ document.addEventListener('contextmenu', (e) => {
   const target = level || { level_id: levelId, name: saved.name || '', mode: saved.mode || 'classic' };
   showContextMenu(e.clientX, e.clientY, levelMenuItems(target));
 });
-document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctxMenu')) hideContextMenu(); });
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('#ctxMenu') && !e.target.closest('#tour')) hideContextMenu(); }); // (clicking the tour's own card or dimmed area must not dismiss the demo menu)
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideContextMenu(); });
 window.addEventListener('blur', hideContextMenu);
 window.addEventListener('resize', hideContextMenu);
@@ -3021,8 +3202,167 @@ $('#adaptiveMethod').addEventListener('change', () => {
 });
 
 let bgFront = 0, bgToken = 0, bgShownVid = null;
+// ---------------------------------------------------------------------------
+// Shader backdrop: soft floating colour bubbles built from the level's picture.
+// The picture is cut into 8 x 6 = 48 regions. Each region's colour is averaged (in linear light, like the accent
+// colour is) and becomes one bubble that starts where its region was and drifts slowly around that spot, so the
+// whole thing still looks like the picture, just melted. It's drawn very small and stretched up by the browser,
+// so it costs very little - and it stops entirely when hidden, switched off, or in Lite mode.
+// ---------------------------------------------------------------------------
+const SHADER_COLS = 8, SHADER_ROWS = 6, SHADER_N = SHADER_COLS * SHADER_ROWS, SHADER_SCALE = 6;
+const shaderCache = new Map(); // video id -> 48 [r,g,b]
+const shader = { cv: null, ctx: null, raf: 0, last: 0, vid: undefined, token: 0, from: null, to: null, cur: null, fadeStart: 0, bubbles: null,
+  clock: 0, speed: 1, intensity: 1, dirty: true };
+const SHADER_MARGIN = 90; // the canvas reaches this many px past every edge, so the blur never fades out at the window's edges
+const SHADER_FADE_MS = 1500;
+const shaderSpeedNow = () => (Number.isFinite(appSettings.shaderSpeed) ? appSettings.shaderSpeed : 100);
+const shaderIntensityNow = () => (Number.isFinite(appSettings.shaderIntensity) ? appSettings.shaderIntensity : 100);
+// the Shader speed / intensity sliders (Settings > Background)
+function applyShaderTuning() {
+  const sp = shaderSpeedNow(), it = shaderIntensityNow();
+  shader.speed = sp / 100; shader.intensity = it / 100;
+  document.body.style.setProperty('--sh-int', String(it / 100));
+  const set = (id, v, def, reset) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.dataset.default = String(def);
+    el.value = v;
+    $('#' + id.replace('Slider', 'Out')).textContent = v === def ? `${v}% · default` : `${v}%`;
+    $('#' + reset).disabled = v === def;
+  };
+  set('shaderSpeedSlider', sp, 100, 'shaderSpeedReset');
+  set('shaderIntensitySlider', it, 100, 'shaderIntensityReset');
+  shaderKick();
+}
+function shaderKick() { shader.dirty = true; shaderSync(); } // something changed: draw again (and wake up if it had gone idle)
+$('#shaderSpeedSlider').addEventListener('input', () => { setSetting('shaderSpeed', Number($('#shaderSpeedSlider').value)); applyShaderTuning(); });
+$('#shaderIntensitySlider').addEventListener('input', () => { setSetting('shaderIntensity', Number($('#shaderIntensitySlider').value)); applyShaderTuning(); });
+$('#shaderSpeedReset').addEventListener('click', () => { setSetting('shaderSpeed', 100); applyShaderTuning(); });
+$('#shaderIntensityReset').addEventListener('click', () => { setSetting('shaderIntensity', 100); applyShaderTuning(); });
+
+function hslToRgbArr(h, s, l) { // h 0-360, s/l 0-1 -> [r,g,b] 0-255
+  const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+// what shows before a level has been looked at (or if its picture can't be read): a calm blue-violet wash
+function shaderDefaultColours() {
+  const out = [];
+  for (let i = 0; i < SHADER_N; i++) { const c = i % SHADER_COLS, r = Math.floor(i / SHADER_COLS); out.push(...hslToRgbArr(225 + ((c * 9 + r * 14) % 46), 0.5, 0.36)); }
+  return out;
+}
+function shaderRegions(vid) {
+  if (shaderCache.has(vid)) return Promise.resolve(shaderCache.get(vid));
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const B = 6, W = SHADER_COLS * B, H = SHADER_ROWS * B; // 48 x 36 pixels: six per region, side to side
+        const cv = document.createElement('canvas');
+        cv.width = W; cv.height = H;
+        const g = cv.getContext('2d', { willReadFrequently: true });
+        // YouTube thumbnails have black bars top and bottom: sample only the picture itself
+        g.drawImage(img, 0, img.height * 0.125, img.width, img.height * 0.75, 0, 0, W, H);
+        const d = g.getImageData(0, 0, W, H).data;
+        const out = [];
+        for (let r = 0; r < SHADER_ROWS; r++) for (let q = 0; q < SHADER_COLS; q++) {
+          let lr = 0, lg = 0, lb = 0;
+          for (let y = 0; y < B; y++) for (let x = 0; x < B; x++) {
+            const i = ((r * B + y) * W + q * B + x) * 4;
+            lr += srgbToLin(d[i]); lg += srgbToLin(d[i + 1]); lb += srgbToLin(d[i + 2]);
+          }
+          out.push(linToSrgb(lr / (B * B)), linToSrgb(lg / (B * B)), linToSrgb(lb / (B * B)));
+        }
+        shaderCache.set(vid, out);
+        resolve(out);
+      } catch { resolve(null); } // a picture the browser won't let us read
+    };
+    img.onerror = () => resolve(null);
+    img.src = `https://img.youtube.com/vi/${vid}/hqdefault.jpg`;
+  });
+}
+function shaderEnsure() {
+  if (!shader.cv) { shader.cv = document.getElementById('shaderBg'); shader.ctx = shader.cv.getContext('2d'); }
+  if (!shader.cur) { const d = shaderDefaultColours(); shader.cur = Float32Array.from(d); shader.from = Float32Array.from(d); shader.to = Float32Array.from(d); shader.fadeStart = -1e9; }
+  if (!shader.bubbles) {
+    const rnd = (i, k) => { const x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return x - Math.floor(x); };
+    shader.bubbles = Array.from({ length: SHADER_N }, (_, i) => ({
+      bx: ((i % SHADER_COLS) + 0.5) / SHADER_COLS, by: (Math.floor(i / SHADER_COLS) + 0.5) / SHADER_ROWS,
+      ax: 0.05 + 0.07 * rnd(i, 1), ay: 0.05 + 0.07 * rnd(i, 2),
+      wx: 0.05 + 0.08 * rnd(i, 3), wy: 0.05 + 0.08 * rnd(i, 4), wr: 0.04 + 0.06 * rnd(i, 5),
+      px: rnd(i, 6) * 6.283, py: rnd(i, 7) * 6.283, pr: rnd(i, 8) * 6.283,
+    }));
+  }
+}
+function shaderResize() {
+  if (!shader.cv) return;
+  shader.cv.width = Math.max(32, Math.round((window.innerWidth + SHADER_MARGIN * 2) / SHADER_SCALE));
+  shader.cv.height = Math.max(24, Math.round((window.innerHeight + SHADER_MARGIN * 2) / SHADER_SCALE));
+  shader.dirty = true;
+}
+// a new level: blend from the colours on screen to its colours
+function shaderSetVid(vid) {
+  vid = vid || null;
+  if (vid === shader.vid) return;
+  shader.vid = vid;
+  const token = ++shader.token;
+  shaderEnsure();
+  const apply = (regions) => {
+    if (token !== shader.token) return; // you've already moved on to another level
+    shader.from = Float32Array.from(shader.cur);
+    shader.to = Float32Array.from(regions || shaderDefaultColours());
+    shader.fadeStart = performance.now();
+    shaderKick();
+  };
+  if (!vid) apply(null); else shaderRegions(vid).then(apply);
+}
+function shaderFrame(now) {
+  const fading = now - shader.fadeStart < SHADER_FADE_MS;
+  // nothing is moving and nothing is changing colour (speed 0): stop the loop altogether until something changes
+  if (!fading && !shader.dirty && shader.speed === 0) { shader.raf = 0; shader.last = 0; return; }
+  shader.raf = requestAnimationFrame(shaderFrame);
+  if (now - shader.last < 40) return; // 25 frames a second is plenty for something this slow
+  const dt = shader.last ? Math.min(0.2, (now - shader.last) / 1000) : 0;
+  shader.last = now;
+  shader.dirty = false;
+  shader.clock += dt * shader.speed; // time only advances at the chosen speed, so changing it never makes the bubbles jump
+  const { ctx, cv, cur, from, to, bubbles } = shader;
+  const k = Math.min(1, (now - shader.fadeStart) / SHADER_FADE_MS), e = k * k * (3 - 2 * k);
+  for (let i = 0; i < cur.length; i++) cur[i] = from[i] + (to[i] - from[i]) * e;
+  const W = cv.width, H = cv.height, t = shader.clock;
+  const alpha = Math.min(1, 0.85 * shader.intensity); // intensity: how strongly the bubbles cover the dark base
+  let mr = 0, mg = 0, mb = 0;
+  for (let i = 0; i < SHADER_N; i++) { mr += cur[i * 3]; mg += cur[i * 3 + 1]; mb += cur[i * 3 + 2]; }
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = `rgb(${Math.round(mr / SHADER_N * 0.6)},${Math.round(mg / SHADER_N * 0.6)},${Math.round(mb / SHADER_N * 0.6)})`;
+  ctx.fillRect(0, 0, W, H);
+  const mx = SHADER_MARGIN / SHADER_SCALE, vw = W - mx * 2, vh = H - mx * 2; // bubbles are laid out over the visible part
+  const R = Math.max(vw, vh) * 0.19;
+  for (let i = 0; i < SHADER_N; i++) {
+    const b = bubbles[i];
+    const x = mx + (b.bx + b.ax * Math.sin(t * b.wx + b.px)) * vw, y = mx + (b.by + b.ay * Math.cos(t * b.wy + b.py)) * vh;
+    const r = R * (1 + 0.14 * Math.sin(t * b.wr + b.pr));
+    const c = `${Math.round(cur[i * 3])},${Math.round(cur[i * 3 + 1])},${Math.round(cur[i * 3 + 2])}`;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(${c},${alpha.toFixed(3)})`);
+    g.addColorStop(1, `rgba(${c},0)`);
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+}
+// run only while it can actually be seen
+function shaderSync() {
+  const want = document.body.classList.contains('bg-shader') && !document.body.classList.contains('no-bg') && !document.hidden;
+  if (want && !shader.raf) { shaderEnsure(); shaderResize(); shader.raf = requestAnimationFrame(shaderFrame); }
+  else if (!want && shader.raf) { cancelAnimationFrame(shader.raf); shader.raf = 0; }
+}
+document.addEventListener('visibilitychange', shaderSync);
+window.addEventListener('resize', () => { if (shader.cv && document.body.classList.contains('bg-shader')) { shaderResize(); shaderSync(); } });
+
 function setPageBackground(vid) {
   currentBgVid = vid || null;
+  if (document.body.classList.contains('bg-shader')) shaderSetVid(currentBgVid);
   adaptAccent(currentBgVid);
   const layers = [document.getElementById('pageBg'), document.getElementById('pageBg2')];
   if (!layers[0] || !layers[1]) return;
@@ -3334,7 +3674,7 @@ function viewedMultiLevel() {
 
 // Publishers of every level in the range (the one for the level being viewed is bold),
 // with the viewed level's verifier(s) underneath.
-let multiCredit = { ids: [], settled: false, token: 0 };
+let multiCredit = { ids: [], settled: false, creatorsSettled: false, token: 0 };
 function renderMultiCredits() {
   const zone = document.getElementById('multiCreditsZone');
   if (!zone || multiCredit.token !== multiToken) return;
@@ -3364,6 +3704,25 @@ function renderMultiCredits() {
     rows.push([people.size > 1 ? 'Verifiers' : 'Verifier', links.join(', ') + (pending ? ' …' : '')]);
   } else if (pending) {
     rows.push(['Verifier', 'Loading…']);
+  }
+  // every creator across the range, right under the verifiers and treated the same: the viewed level's are bold
+  const creatorPeople = new Map();
+  const creatorMine = new Set();
+  multiOrder.forEach(l => {
+    const list = creatorsDone.get(l.level_id);
+    if (!list) return;
+    list.forEach(c => {
+      const k = String(c.id ?? personName(c));
+      if (!creatorPeople.has(k)) creatorPeople.set(k, c);
+      if (cur && l.level_id === cur.level_id) creatorMine.add(k);
+    });
+  });
+  const creatorsPending = !multiCredit.creatorsSettled && multiOrder.some(l => !creatorsDone.has(l.level_id));
+  if (creatorPeople.size) {
+    const links = [...creatorPeople.entries()].map(([k, c]) => creatorLinkHtml(c, { current: creatorMine.has(k) }));
+    rows.push([creatorPeople.size > 1 ? 'Creators' : 'Creator', links.join(', ') + (creatorsPending ? ' …' : '')]);
+  } else if (creatorsPending) {
+    rows.push(['Creator', 'Loading…']);
   }
   zone.innerHTML = rows.length
     ? `<div class="credits-list">${rows.map(([k, v]) => `<div class="credit-row"><span class="credit-label">${escapeHtml(k)}</span><span class="credit-value">${v}</span></div>`).join('')}</div>`
@@ -3477,7 +3836,8 @@ function renderMultiSelection() {
   }
 
   let settled = false; // true once every lookup has finished (so unresolved ids show a plain label)
-  const renderPublishers = () => { multiCredit = { ids: publisherIds, settled, token }; renderMultiCredits(); };
+  let creatorsSettled = false;
+  const renderPublishers = () => { multiCredit = { ids: publisherIds, settled, creatorsSettled, token }; renderMultiCredits(); };
   renderPublishers();
 
   // The bulk list only has publisher ids; names come from a level's detail
@@ -3502,6 +3862,20 @@ function renderMultiSelection() {
     settled = true; // anything still unresolved falls back to "Publisher <id>" (still clickable)
     renderPublishers();
   });
+  // Creators: loaded automatically for every level in the range, each one asked for only once (a level that was
+  // looked at before, or is already being fetched, isn't requested again). 2 at a time, like the publishers.
+  const creatorTodo = levels.filter(l => !creatorsDone.has(l.level_id));
+  let nextCreator = 0;
+  const creatorWorker = async () => {
+    while (nextCreator < creatorTodo.length) {
+      const level = creatorTodo[nextCreator++];
+      if (token !== multiToken) return;
+      await fetchCreators(level);
+      renderPublishers();
+      await sleep(120);
+    }
+  };
+  Promise.all([creatorWorker(), creatorWorker()]).then(() => { creatorsSettled = true; renderPublishers(); });
 
   const wantIdx = viewIdx < 0 ? 0 : viewIdx;
   if (!panelExists || viewIdx < 0 || String(levels[wantIdx].id) !== String(state.multiShownId)) showMultiLevel(wantIdx);
@@ -3535,6 +3909,26 @@ function youtubeThumbId(url) {
 }
 
 // everyone who verified the level (the API lists them under `verifications[].submitted_by`)
+// ---- Creators: GET /levels/{level_id}/creators (one request per level, remembered for the session) ----
+const creatorsCache = new Map(); // level_id -> Promise (in flight or done): a level is only ever asked once
+const creatorsDone = new Map();  // level_id -> the people, once known (for drawing without waiting)
+function normalizeCreators(resp) {
+  const arr = Array.isArray(resp) ? resp : (resp && (resp.creators || resp.data || resp.items || resp.results)) || [];
+  return arr.map(x => (x && typeof x === 'object' && x.user && typeof x.user === 'object') ? x.user : x)
+    .map(x => (typeof x === 'string' ? { name: x } : x))
+    .filter(x => x && typeof x === 'object' && personName(x));
+}
+function fetchCreators(level) {
+  const id = level.level_id;
+  if (creatorsCache.has(id)) return creatorsCache.get(id);
+  const p = window.aredl.getLevelCreators(id, modeOfLevel(level))
+    .then(resp => { const list = normalizeCreators(resp); creatorsDone.set(id, list); return list; })
+    .catch(() => { creatorsCache.delete(id); return null; }); // a failure can be retried later
+  creatorsCache.set(id, p);
+  return p;
+}
+const creatorLinkHtml = (c, opts) => (c.id != null ? personLinkHtml(c, opts) : escapeHtml(personName(c)));
+
 function uniqueVerifiers(data) {
   const out = [];
   const seen = new Set();
@@ -3794,19 +4188,14 @@ class VideoDock {
         this.leaveSince = 0;
       }
     } else if (this.isPlaying() || this.mode === 'mini') {
-      // sound only / pause / stop: there is no corner player
-      if (!this.leaveSince) this.leaveSince = Date.now();
-      const settled = tabHidden || this.mode === 'mini' || Date.now() - this.leaveSince > 220;
-      if (settled) {
-        if (reason === 'tab') { // leaving the page (switching tab / level) is what pause and stop are for - scrolling is not
-          if (leave === 'stop') { this.destroy(); return; }
-          if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; }
-        }
-        mode = 'off'; // hidden; unless it was just paused/stopped, it keeps playing
-        this.hiddenByLeave = true;
-      } else {
-        mode = this.mode;
+      // sound only / pause / stop: there is no corner player to hand over to, so it is hidden in the very frame
+      // it leaves its page - no waiting around (that wait is what let the video linger on screen for a moment)
+      if (reason === 'tab') { // leaving the page (switching tab / level) is what pause and stop are for - scrolling is not
+        if (leave === 'stop') { this.destroy(); return; }
+        if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; }
       }
+      mode = 'off'; // hidden; unless it was just paused/stopped, it keeps playing
+      this.hiddenByLeave = true;
     } else {
       this.leaveSince = 0;
       if (this.hiddenByLeave) mode = 'off';
@@ -3879,13 +4268,13 @@ class VideoDock {
     // resize from any corner (the opposite corner stays put)
     el.querySelectorAll('.mp-resize').forEach(handle => {
       const edge = handle.dataset.edge;
-      let startX = 0, startRect = null;
+      let startX = 0, startY = 0, startRect = null;
       handle.addEventListener('pointerdown', (e) => {
         this.dragging = true;
         clearTimeout(this.animTimer);
         el.style.transition = 'none';
         el.style.transform = 'none';
-        startX = e.clientX;
+        startX = e.clientX; startY = e.clientY;
         startRect = el.getBoundingClientRect();
         handle.setPointerCapture(e.pointerId);
         el.classList.add('dragging');
@@ -3893,9 +4282,12 @@ class VideoDock {
       });
       handle.addEventListener('pointermove', (e) => {
         if (!this.dragging || !startRect) return;
-        const dxm = e.clientX - startX;
-        const leftEdge = edge.includes('l');
-        const w = Math.round(Math.min(Math.max(startRect.width + (leftEdge ? -dxm : dxm), 220), Math.min(900, window.innerWidth - 16)));
+        const leftEdge = edge.includes('l'), topEdge = edge.startsWith('t');
+        // grow by whichever way you pulled further outwards (sideways, or up / down - a 16:9 picture grows with both)
+        const byX = (e.clientX - startX) * (leftEdge ? -1 : 1);
+        const byY = (e.clientY - startY) * (topEdge ? -1 : 1) * (16 / 9);
+        const grow = Math.abs(byX) >= Math.abs(byY) ? byX : byY;
+        const w = Math.round(Math.min(Math.max(startRect.width + grow, 220), Math.min(900, window.innerWidth - 16)));
         const h = Math.round(w * 9 / 16);
         let left = leftEdge ? startRect.right - w : startRect.left;
         let top = edge.startsWith('t') ? startRect.bottom - h : startRect.top;
@@ -4012,10 +4404,6 @@ function playVideo(url, ctx = {}) {
 function renderLevelDetail(data) {
   const video = findYoutubeUrl(data);
   const vid = video ? youtubeThumbId(video) : null;
-  const publisher = personName(data.publisher);
-  const verifier = personName(data.verifier);
-  const creators = Array.isArray(data.creators) ? data.creators.map(personName).filter(Boolean) : [];
-
   setPageBackground(vid);
 
   // The verification video is the one thing allowed to render inside the
@@ -4025,22 +4413,38 @@ function renderLevelDetail(data) {
   state.detailLoaded = listed ? listed.id : null;
   playVideo(video, { title: (listed && listed.name) || data.name || '', onReturn: () => jumpToLevel(data.level_id) });
 
-  const creditsZone = document.getElementById('panelCreditsZone');
-  if (creditsZone) {
-    const rows = [];
-    const publisherObj = data.publisher && typeof data.publisher === 'object' ? data.publisher : null;
-    const verifiers = uniqueVerifiers(data);
-    // names are text with a dotted underline (click = open that player's profile)
-    if (publisher) rows.push(['Publisher', publisherObj && publisherObj.id != null ? personLinkHtml(publisherObj) : escapeHtml(publisher)]);
-    if (verifiers.length) rows.push([verifiers.length > 1 ? 'Verifiers' : 'Verifier', verifiers.map(v => personLinkHtml(v)).join(', ')]);
-    else if (verifier) rows.push(['Verifier', escapeHtml(verifier)]);
-    if (creators.length) rows.push([creators.length > 1 ? 'Creators' : 'Creator', escapeHtml(creators.join(', '))]);
-    creditsZone.innerHTML = rows.length
-      ? `<div class="credits-list">${rows.map(([k, v]) => `<div class="credit-row"><span class="credit-label">${escapeHtml(k)}</span><span class="credit-value">${v}</span></div>`).join('')}</div>`
-      : '';
+  renderPanelCredits(data);
+  if (!creatorsDone.has(data.level_id)) { // ask for the creators once; the row appears (under Verifier) when they arrive
+    fetchCreators(listed || { level_id: data.level_id }).then(() => {
+      const zone = document.getElementById('panelCreditsZone');
+      if (zone && String(zone.dataset.levelId) === String(data.level_id)) renderPanelCredits(data);
+    });
   }
 
   return `${rawDetails(`Full API response for this level`, data)}`;
+}
+
+// Publisher, Verifier(s), then Creator(s) - names are links to that player's profile.
+function renderPanelCredits(data) {
+  const creditsZone = document.getElementById('panelCreditsZone');
+  if (!creditsZone) return;
+  creditsZone.dataset.levelId = data.level_id;
+  const publisher = personName(data.publisher);
+  const verifier = personName(data.verifier);
+  const rows = [];
+  const publisherObj = data.publisher && typeof data.publisher === 'object' ? data.publisher : null;
+  const verifiers = uniqueVerifiers(data);
+  // names are text with a dotted underline (click = open that player's profile)
+  if (publisher) rows.push(['Publisher', publisherObj && publisherObj.id != null ? personLinkHtml(publisherObj) : escapeHtml(publisher)]);
+  if (verifiers.length) rows.push([verifiers.length > 1 ? 'Verifiers' : 'Verifier', verifiers.map(v => personLinkHtml(v)).join(', ')]);
+  else if (verifier) rows.push(['Verifier', escapeHtml(verifier)]);
+  const creators = creatorsDone.get(data.level_id) || [];
+  const named = Array.isArray(data.creators) ? data.creators.map(personName).filter(Boolean) : []; // names the level record itself carries
+  if (creators.length) rows.push([creators.length > 1 ? 'Creators' : 'Creator', creators.map(c => creatorLinkHtml(c)).join(', ')]);
+  else if (named.length) rows.push([named.length > 1 ? 'Creators' : 'Creator', escapeHtml(named.join(', '))]);
+  creditsZone.innerHTML = rows.length
+    ? `<div class="credits-list">${rows.map(([k, v]) => `<div class="credit-row"><span class="credit-label">${escapeHtml(k)}</span><span class="credit-value">${v}</span></div>`).join('')}</div>`
+    : '';
 }
 
 async function loadLevelDetail(level) {
@@ -5197,6 +5601,45 @@ function bumpNotifBadge(n) {
 }
 
 // API notifications and local "followed level" updates are shown as one list, newest first.
+// Level names inside a notification become links to that level. Names are matched against both lists, longest first
+// (so "Sonic Wave" wins over "Sonic"), on word boundaries; a level id the notification carries is used too.
+let levelNameIndexCache = { key: '', list: [] };
+function levelNameIndex() {
+  const key = MODES.map(m => levelsOf(m).length).join(':');
+  if (levelNameIndexCache.key !== key) {
+    const list = [];
+    MODES.forEach(m => levelsOf(m).forEach(l => { if (l.name && String(l.name).length >= 3) list.push({ name: String(l.name), id: l.level_id }); }));
+    list.sort((a, b) => b.name.length - a.name.length);
+    levelNameIndexCache = { key, list };
+  }
+  return levelNameIndexCache.list;
+}
+function linkLevelNames(text, hint) {
+  text = String(text);
+  const marks = [];
+  const word = /[A-Za-z0-9]/;
+  const overlaps = (s, e) => marks.some(m => s < m.end && e > m.start);
+  const add = (name, id) => {
+    for (let from = 0; ;) {
+      const i = text.indexOf(name, from);
+      if (i < 0) break;
+      const end = i + name.length;
+      if (!(i > 0 && word.test(text[i - 1])) && !(end < text.length && word.test(text[end])) && !overlaps(i, end)) marks.push({ start: i, end, id });
+      from = end;
+    }
+  };
+  if (hint && hint.name && hint.id != null) add(String(hint.name), hint.id);
+  levelNameIndex().forEach(n => add(n.name, n.id));
+  marks.sort((a, b) => a.start - b.start);
+  let html = '', pos = 0;
+  marks.forEach(m => {
+    html += escapeHtml(text.slice(pos, m.start)) + `<a href="#" class="level-link" data-jump="${escapeHtml(String(m.id))}">${escapeHtml(text.slice(m.start, m.end))}</a>`;
+    pos = m.end;
+  });
+  html += escapeHtml(text.slice(pos));
+  if (!marks.length && hint && hint.id != null) html += ` <a href="#" class="level-link" data-jump="${escapeHtml(String(hint.id))}">Open level</a>`;
+  return html;
+}
 function renderNotifications() {
   const el = $('#notifState');
   const api = notifAll.map((item, i) => ({ item, id: notifId(item, i) })).filter(n => !clearedNotifIds.has(n.id)).map(({ item, id }) => ({
@@ -5205,6 +5648,7 @@ function renderNotifications() {
     type: item.notification_type || null,
     hex: item.notification_type ? (NOTIF_TYPE_COLORS[String(item.notification_type).toLowerCase()] || '#8b8b93') : null,
     date: entryDate(item),
+    levelId: item.level_id ?? (item.level && item.level.level_id) ?? (item.data && item.data.level_id) ?? (item.metadata && item.metadata.level_id) ?? null,
     local: false,
   }));
   const followed = followNotifs.map(n => ({
@@ -5213,6 +5657,7 @@ function renderNotifications() {
     type: 'followed',
     hex: 'var(--accent)',
     date: n.at ? new Date(n.at) : null,
+    levelId: n.level_id, levelName: n.level_name,
     local: true,
   }));
   const all = [...followed, ...api].sort((a, b) => (b.date ? b.date.getTime() : 0) - (a.date ? a.date.getTime() : 0));
@@ -5228,7 +5673,7 @@ function renderNotifications() {
   el.style.display = 'none';
   $('#notifList').innerHTML = all.map(n => `<div class="notif-item" style="--c:${n.hex || 'var(--accent)'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
-        <span>${escapeHtml(n.text)}</span>
+        <span>${linkLevelNames(n.text, { id: n.levelId, name: n.levelName })}</span>
         <span class="notif-right">
           ${n.type ? `<span class="tag" style="color:${n.hex};border-color:${n.hex};flex:none;">${escapeHtml(n.type)}</span>` : ''}
           <button class="notif-clear" data-notif-clear="${escapeHtml(n.id)}" title="Clear this notification" aria-label="Clear this notification">✕</button>
@@ -5367,8 +5812,19 @@ async function loadSubmissions() {
   el.className = 'state';
   el.innerHTML = '<div class="spinner"></div>Loading…';
   try {
-    const data = await window.aredl.getSubmissions(tabModes.submissions);
-    submissionsData = Array.isArray(data) ? data : (data.data || data.submissions || data.items || data.results || []);
+    const wanted = modesFor(tabModes.submissions);
+    await Promise.all(wanted.map(ensureLevels)); // names / positions come from the lists
+    const parts = await Promise.all(wanted.map(m => window.aredl.getSubmissions(m).then(data => ({ m, data })).catch(error => ({ m, error }))));
+    if (parts.every(x => x.error)) throw parts[0].error; // in the All view one list failing still shows the other
+    submissionsData = [];
+    parts.forEach(({ m, data }) => {
+      if (data === undefined) return;
+      const arr = Array.isArray(data) ? data : (data.data || data.submissions || data.items || data.results || []);
+      arr.forEach(item => {
+        if (item && typeof item === 'object') Object.defineProperty(item, '_mode', { value: m, enumerable: false, configurable: true });
+        submissionsData.push(item);
+      });
+    });
     state.submissionsLoaded = true;
     el.style.display = 'none';
     $('#submissionsRawZone').innerHTML = `${rawDetails(`Full API response (${submissionsData.length.toLocaleString()} submissions)`, submissionsData)}`;
@@ -5385,6 +5841,8 @@ async function loadSubmissions() {
   }
 }
 
+// which list a submission belongs to (it's tagged when loaded; a single-list view knows anyway)
+const subMode = (item) => (item && item._mode) || (tabModes.submissions === 'all' ? 'classic' : tabModes.submissions);
 function renderSubmissions() {
   submissionsSorted = sortSubmissions(submissionsData, $('#submissionsSortBy').value);
   state.openSubmissionKey = null; // the list is rebuilt with every card closed
@@ -5394,7 +5852,8 @@ function renderSubmissions() {
     const hex = SUBMISSION_STATUS_COLORS[String(status).toLowerCase()] || '#8b8b93';
     const created = subCreated(item);
     const levelId = subLevelId(item);
-    const listedLevel = levelId != null ? levelOf(tabModes.submissions, levelId) : null;
+    const im = subMode(item);
+    const listedLevel = levelId != null ? levelOf(im, levelId) : null;
     const positionPrefix = listedLevel && listedLevel.position != null
       ? `<span class="title-pos">#${listedLevel.position}</span><span class="title-divider"></span>`
       : '';
@@ -5404,6 +5863,7 @@ function renderSubmissions() {
           <strong>${positionPrefix}${escapeHtml(name)}${listedLevel ? `<button class="icon-tool sub-jump" data-jump="${escapeHtml(String(listedLevel.level_id))}" data-tip="Show in Demon List" aria-label="Show in Demon List"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M4 10h12M4 14h7"/></svg></button>` : ''}</strong>
           <div class="submission-meta">
             <span class="tag status-tag">${escapeHtml(status)}</span>
+            ${tabModes.submissions === 'all' && im === 'platformer' ? '<span class="tag">Platformer</span>' : ''}
             <span class="tag" id="squeue-${i}">Queue …</span>
             ${created ? `<span class="dim-inline">${escapeHtml(new Date(created).toLocaleDateString())} · ${escapeHtml(formatRelativeTime(new Date(created)))}</span>` : ''}
           </div>
@@ -5426,7 +5886,7 @@ async function attachSubmissionQueue(item, i) {
   const el = document.getElementById(`squeue-${i}`);
   if (id == null) { el?.remove(); return; }
   try {
-    const data = await window.aredl.getSubmissionQueue(id, tabModes.submissions);
+    const data = await window.aredl.getSubmissionQueue(id, subMode(item));
     const pos = (typeof data === 'number') ? data : (data.position ?? data.queue_position ?? data.rank ?? null);
     const el2 = document.getElementById(`squeue-${i}`);
     if (!el2) return;
@@ -5446,7 +5906,7 @@ async function attachSubmissionBg(item, i) {
   try {
     let detail = detailCache.get(levelId);
     if (!detail) {
-      detail = await window.aredl.getLevelDetail(levelId, tabModes.submissions);
+      detail = await window.aredl.getLevelDetail(levelId, subMode(item));
       detailCache.set(levelId, detail);
     }
     const url = findYoutubeUrl(detail);
@@ -5565,11 +6025,12 @@ function enhanceSelect(sel) {
     menu = document.createElement('div');
     menu.className = 'dd-menu';
     [...sel.options].forEach(o => {
-      if (o.disabled || o.hidden) return;
+      if (o.hidden) return;
       const item = document.createElement('button');
       item.type = 'button';
-      item.className = 'dd-item' + (o.value === sel.value ? ' selected' : '');
+      item.className = 'dd-item' + (o.value === sel.value ? ' selected' : '') + (o.disabled ? ' disabled' : '');
       item.textContent = o.textContent;
+      if (o.disabled) { item.setAttribute('aria-disabled', 'true'); item.tabIndex = -1; menu.appendChild(item); return; } // greyed out, not pickable
       if (o.dataset.color) { item.classList.add('colored'); item.style.setProperty('--c', o.dataset.color); }
       item.addEventListener('click', () => {
         sel.value = o.value;
@@ -5604,7 +6065,8 @@ function enhanceSelect(sel) {
   btn.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
 }
 // ---- Classic / Platformer dropdowns (every one starts on Classic) ----
-function addModeSelect(tab, onChange) {
+const modeHandlers = {}; // page -> what to do when its dropdown changes
+function addModeSelect(tab, onChange, { all = false } = {}) {
   const row = document.querySelector(`#tab-${tab} .tab-title-row`);
   if (!row) return null;
   let actions = row.querySelector('.title-actions');
@@ -5618,17 +6080,28 @@ function addModeSelect(tab, onChange) {
   sel.className = 'mode-select';
   sel.id = `${tab}Mode`;
   sel.setAttribute('aria-label', 'Which list');
-  sel.innerHTML = '<option value="classic">Classic</option><option value="platformer">Platformer</option>';
+  sel.innerHTML = `${all ? '<option value="all">All</option>' : ''}<option value="classic">Classic</option><option value="platformer">Platformer</option>`;
+  sel.value = tabModes[tab];
   actions.insertBefore(sel, actions.firstChild);
-  sel.addEventListener('change', () => { tabModes[tab] = sel.value; onChange(sel.value); });
+  modeHandlers[tab] = onChange;
+  sel.addEventListener('change', () => setTabMode(tab, sel.value));
   return sel;
 }
+// Change a page's list (from its dropdown, or from back / forward).
+function setTabMode(tab, mode, { push = true, quiet = false } = {}) {
+  tabModes[tab] = mode;
+  const sel = document.getElementById(`${tab}Mode`);
+  if (sel && sel.value !== mode) sel.value = mode;
+  if (!quiet && modeHandlers[tab]) modeHandlers[tab](mode);
+  if (push) pushNavState(); // so Back returns to the list you had before
+}
+const modesFor = (mode) => (mode === 'all' ? MODES : [mode]);
 // draw now, and again once that list's levels have arrived (names / positions come from them)
 const withLevels = (mode, draw) => { draw(); if (!modeStore[mode].loaded) ensureLevels(mode).then(draw); };
-addModeSelect('favourites', (m) => withLevels(m, renderFavourites));
+addModeSelect('favourites', (m) => modesFor(m).forEach(x => withLevels(x, renderFavourites)), { all: true });
 addModeSelect('followed', (m) => withLevels(m, renderFollowed));
 addModeSelect('personal', (m) => withLevels(m, renderPersonal));
-addModeSelect('submissions', (m) => { state.submissionsLoaded = false; ensureLevels(m); loadSubmissions(); });
+addModeSelect('submissions', (m) => { state.submissionsLoaded = false; modesFor(m).forEach(ensureLevels); loadSubmissions(); }, { all: true });
 addModeSelect('changelog', () => loadChangelog(true));
 addModeSelect('profile', () => profileModeChanged());
 addModeSelect('leaderboard', () => { lbState.data = null; loadLeaderboard(1); });
@@ -5640,12 +6113,7 @@ addModeSelect('leaderboard', () => { lbState.data = null; loadLeaderboard(1); })
   board.setAttribute('aria-label', 'Which leaderboard');
   board.innerHTML = '<option value="players">Players</option><option value="countries">Countries</option>';
   first.after(board);
-  board.addEventListener('change', () => {
-    lbState.board = board.value;
-    lbState.data = null;
-    $('#lbSearch').placeholder = board.value === 'countries' ? 'Search countries' : 'Search this page';
-    loadLeaderboard(1);
-  });
+  board.addEventListener('change', () => setLbBoard(board.value));
 }
 
 document.querySelectorAll('select').forEach(enhanceSelect);
