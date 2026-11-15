@@ -7,6 +7,16 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
+    version: '1.0.9',
+    title: 'Settings search, smoother scrolling and an easier corner player',
+    items: [
+      ['new', 'Search bar at the top of Settings (Ctrl+F also jumps to it). Type to narrow the page down to the options that match; Esc clears it.'],
+      ['fixed', 'Slider value pills (like 100%) keep one fixed size, so the slider no longer changes size under your hand when it reaches the default. Sitting on the default just tones the pill down.'],
+      ['fixed', 'Scrolling Settings is much smoother: the animated backdrop holds still while you scroll, and settings cards no longer re-blur the background on every frame in glass themes.'],
+      ['improved', 'Resizing the corner player is easier: bigger grab areas just outside the corners, all four edges resize too, and it stops at the window edge instead of drifting away from the corner you are holding.'],
+    ],
+  },
+  {
     version: '1.0.8',
     title: 'Shader controls, tidier sliders and a steadier corner player',
     items: [

@@ -355,6 +355,14 @@
             <span>Refresh</span>
           </button>
         </div>
+        <div class="settings-search">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.6"/><path d="M13 13l4 4"/></svg>
+          <input type="text" id="settingsSearch" placeholder="Search settings" autocomplete="off" spellcheck="false" aria-label="Search settings">
+          <button class="settings-search-clear" id="settingsSearchClear" hidden aria-label="Clear search" title="Clear">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>
+          </button>
+        </div>
+        <p class="settings-no-results" id="settingsNoResults" hidden></p>
       </div>
       <h3 class="settings-section">Account</h3>
       <div class="settings-card">
@@ -700,6 +708,10 @@
   <div class="mp-resize" data-edge="tr"></div>
   <div class="mp-resize" data-edge="bl"></div>
   <div class="mp-resize" data-edge="br"></div>
+  <div class="mp-resize mp-edge" data-edge="t"></div>
+  <div class="mp-resize mp-edge" data-edge="b"></div>
+  <div class="mp-resize mp-edge" data-edge="l"></div>
+  <div class="mp-resize mp-edge" data-edge="r"></div>
 </div>
 </template>
 

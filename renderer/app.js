@@ -827,6 +827,55 @@ document.addEventListener('pointerup', (e) => {
 document.addEventListener('pointercancel', () => navDragEnd(false));
 window.addEventListener('blur', () => navDragEnd(false));
 
+// ---- Settings search: type to narrow the settings page down to the cards / options that match ----
+(function settingsSearch() {
+  const root = $('#tab-settings'), input = $('#settingsSearch'), clear = $('#settingsSearchClear'), none = $('#settingsNoResults');
+  const norm = (t) => String(t || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const unavailable = (el) => el.hidden || !!el.closest('[hidden]'); // options the app itself is hiding right now stay hidden
+  function run() {
+    const q = norm(input.value), terms = q ? q.split(' ') : [];
+    clear.hidden = !q;
+    const match = (text) => { const t = norm(text); return terms.every(w => t.includes(w)); };
+    const cards = [...root.querySelectorAll(':scope > .settings-card')];
+    const heads = [...root.querySelectorAll(':scope > .settings-section')];
+    root.querySelectorAll('.search-hide').forEach(el => el.classList.remove('search-hide'));
+    if (!terms.length) { none.hidden = true; return; }
+    const shown = new Set();
+    cards.forEach(card => {
+      const title = card.querySelector(':scope > h3');
+      const lines = [...card.querySelectorAll('.setting-line')].filter(l => !unavailable(l));
+      let visible;
+      if (lines.length) {
+        if (title && match(title.textContent)) visible = true; // the card's own name matches: keep all of it
+        else {
+          visible = false;
+          lines.forEach(l => { if (match(l.textContent)) visible = true; else l.classList.add('search-hide'); });
+        }
+      } else {
+        visible = !unavailable(card) && match(card.textContent);
+      }
+      if (visible) shown.add(card); else card.classList.add('search-hide');
+    });
+    // a section heading stays only while some card under it is still showing
+    heads.forEach(hd => {
+      let any = false;
+      for (let n = hd.nextElementSibling; n && !n.classList.contains('settings-section'); n = n.nextElementSibling) if (shown.has(n)) any = true;
+      if (!any) hd.classList.add('search-hide');
+    });
+    none.hidden = shown.size > 0;
+    if (!shown.size) none.textContent = `No settings match “${input.value.trim()}”.`;
+  }
+  let timer = null;
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 70); });
+  clear.addEventListener('click', () => { input.value = ''; run(); input.focus(); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { input.value = ''; run(); e.stopPropagation(); } });
+  // options can appear / disappear while you search (a toggle that reveals more settings), so look again after any change
+  root.addEventListener('change', () => setTimeout(run, 0));
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && root.classList.contains('active')) { e.preventDefault(); input.focus(); input.select(); }
+  });
+})();
+
 $('#videoLeaveSelect').addEventListener('change', () => setSetting('videoOnLeave', $('#videoLeaveSelect').value));
 $('#favSortBy').addEventListener('change', () => { setSetting('favSort', $('#favSortBy').value); renderFavourites(); });
 
@@ -929,7 +978,7 @@ function applyBgBright() {
   const eff = custom == null ? bgBrightDefault() : custom;
   slider.dataset.default = String(bgBrightDefault());
   slider.value = eff;
-  $('#bgBrightOut').textContent = custom == null || custom === bgBrightDefault() ? `${eff}% · default` : `${eff}%`;
+  $('#bgBrightOut').textContent = `${eff}%`;
   $('#bgBrightReset').disabled = custom == null;
 }
 $('#bgBrightSlider').addEventListener('input', () => {
@@ -3162,7 +3211,7 @@ function applyBgBlur() {
   const eff = custom == null ? bgBlurDefault() : custom;
   slider.dataset.default = String(bgBlurDefault());
   slider.value = eff;
-  $('#bgBlurOut').textContent = custom == null || custom === bgBlurDefault() ? `${eff}px · default` : `${eff}px`;
+  $('#bgBlurOut').textContent = `${eff}px`;
   $('#bgBlurReset').disabled = custom == null;
 }
 $('#bgBlurSlider').addEventListener('input', () => {
@@ -3211,6 +3260,14 @@ let bgFront = 0, bgToken = 0, bgShownVid = null;
 // ---------------------------------------------------------------------------
 const SHADER_COLS = 8, SHADER_ROWS = 6, SHADER_N = SHADER_COLS * SHADER_ROWS, SHADER_SCALE = 6;
 const shaderCache = new Map(); // video id -> 48 [r,g,b]
+// While anything is being scrolled the animated backdrop holds still (it carries on the moment scrolling stops):
+// redrawing a blurred, moving layer behind a scrolling page is what made long pages like Settings stutter.
+let scrollingNow = false, scrollTimer = null;
+document.addEventListener('scroll', () => {
+  if (!scrollingNow) { scrollingNow = true; document.body.classList.add('is-scrolling'); }
+  clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(() => { scrollingNow = false; document.body.classList.remove('is-scrolling'); shaderKick(); }, 160);
+}, { capture: true, passive: true });
 const shader = { cv: null, ctx: null, raf: 0, last: 0, vid: undefined, token: 0, from: null, to: null, cur: null, fadeStart: 0, bubbles: null,
   clock: 0, speed: 1, intensity: 1, dirty: true };
 const SHADER_MARGIN = 90; // the canvas reaches this many px past every edge, so the blur never fades out at the window's edges
@@ -3227,7 +3284,7 @@ function applyShaderTuning() {
     if (!el) return;
     el.dataset.default = String(def);
     el.value = v;
-    $('#' + id.replace('Slider', 'Out')).textContent = v === def ? `${v}% · default` : `${v}%`;
+    $('#' + id.replace('Slider', 'Out')).textContent = `${v}%`;
     $('#' + reset).disabled = v === def;
   };
   set('shaderSpeedSlider', sp, 100, 'shaderSpeedReset');
@@ -3322,6 +3379,7 @@ function shaderFrame(now) {
   // nothing is moving and nothing is changing colour (speed 0): stop the loop altogether until something changes
   if (!fading && !shader.dirty && shader.speed === 0) { shader.raf = 0; shader.last = 0; return; }
   shader.raf = requestAnimationFrame(shaderFrame);
+  if (scrollingNow) return; // hold still while scrolling
   if (now - shader.last < 40) return; // 25 frames a second is plenty for something this slow
   const dt = shader.last ? Math.min(0.2, (now - shader.last) / 1000) : 0;
   shader.last = now;
@@ -4265,11 +4323,14 @@ class VideoDock {
       saveMiniPrefs();
     });
 
-    // resize from any corner (the opposite corner stays put)
+    // resize from any corner or edge: the opposite corner / edge stays put, and it never grows past the window
     el.querySelectorAll('.mp-resize').forEach(handle => {
-      const edge = handle.dataset.edge;
+      const edge = handle.dataset.edge; // tl tr bl br, or t b l r
+      const sx = edge.includes('l') ? -1 : edge.includes('r') ? 1 : 0; // which way is "outwards" sideways
+      const sy = edge.includes('t') ? -1 : edge.includes('b') ? 1 : 0; // ...and up / down
       let startX = 0, startY = 0, startRect = null;
       handle.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
         this.dragging = true;
         clearTimeout(this.animTimer);
         el.style.transition = 'none';
@@ -4282,30 +4343,33 @@ class VideoDock {
       });
       handle.addEventListener('pointermove', (e) => {
         if (!this.dragging || !startRect) return;
-        const leftEdge = edge.includes('l'), topEdge = edge.startsWith('t');
-        // grow by whichever way you pulled further outwards (sideways, or up / down - a 16:9 picture grows with both)
-        const byX = (e.clientX - startX) * (leftEdge ? -1 : 1);
-        const byY = (e.clientY - startY) * (topEdge ? -1 : 1) * (16 / 9);
-        const grow = Math.abs(byX) >= Math.abs(byY) ? byX : byY;
-        const w = Math.round(Math.min(Math.max(startRect.width + grow, 220), Math.min(900, window.innerWidth - 16)));
+        // how much wider it should get: by the sideways pull, the up / down pull (a 16:9 picture grows with both), or the bigger of the two
+        const byX = (e.clientX - startX) * sx;
+        const byY = (e.clientY - startY) * sy * (16 / 9);
+        const grow = !sy ? byX : !sx ? byY : (Math.abs(byX) >= Math.abs(byY) ? byX : byY);
+        // the most room there is on the side it grows towards
+        const roomX = sx < 0 ? startRect.right - 8 : window.innerWidth - 8 - startRect.left;
+        const roomY = (sy < 0 ? startRect.bottom - dockTopSafe() : window.innerHeight - 8 - startRect.top) * 16 / 9;
+        const w = Math.round(Math.min(Math.max(startRect.width + grow, 220), Math.max(220, Math.min(900, roomX, roomY))));
         const h = Math.round(w * 9 / 16);
-        let left = leftEdge ? startRect.right - w : startRect.left;
-        let top = edge.startsWith('t') ? startRect.bottom - h : startRect.top;
-        left = Math.min(Math.max(left, 8), window.innerWidth - w - 8);
-        top = Math.min(Math.max(top, dockTopSafe()), window.innerHeight - h - 8);
+        const left = sx < 0 ? startRect.right - w : startRect.left;
+        const top = sy < 0 ? startRect.bottom - h : startRect.top;
         miniPrefs.width = w;
         miniPrefs.pos = { x: left, y: top };
         el.style.left = left + 'px'; el.style.top = top + 'px';
         el.style.width = w + 'px'; el.style.height = h + 'px';
       });
-      handle.addEventListener('pointerup', (e) => {
+      const finish = (e) => {
         if (!this.dragging) return;
         try { handle.releasePointerCapture(e.pointerId); } catch { /* already released */ }
         this.dragging = false;
+        startRect = null;
         el.classList.remove('dragging');
         this.lastCss = '';
         saveMiniPrefs();
-      });
+      };
+      handle.addEventListener('pointerup', finish);
+      handle.addEventListener('pointercancel', finish);
     });
   }
 }
@@ -6179,6 +6243,9 @@ function enhanceSlider(inp) {
     mark.style.display = def !== undefined && def !== '' ? 'block' : 'none';
     if (mark.style.display === 'block') mark.style.left = ((Number(def) - min) / (max - min) * 100) + '%';
     wrap.classList.toggle('disabled', inp.disabled);
+    // the value pill keeps a fixed size; sitting on the default just tones it down (the mark on the slider shows where it is)
+    const out = inp.closest('.slider-wrap') && inp.closest('.slider-wrap').querySelector('output');
+    if (out) out.classList.toggle('is-default', def !== undefined && def !== '' && Number(inp.value) === Number(def));
   };
   const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
   Object.defineProperty(inp, 'value', { configurable: true, get() { return desc.get.call(inp); }, set(v) { desc.set.call(inp, v); refresh(); } });

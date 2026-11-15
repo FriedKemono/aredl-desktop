@@ -2226,36 +2226,66 @@ body.nav-editing .top-nav .nav-btn:active,body.nav-editing .nav-more-btn:active{
 #shaderOptions:not([hidden]){display:contents;}
 #shaderOptions > .setting-line{border-top:1px solid var(--border);}
 
-/* ---- Sliders: the value is one tidy pill right beside the slider, in the app's own font ---- */
+/* ---- Sliders: the value is one tidy pill right beside the slider, in the app's own font.
+   Its size never changes (so the slider never resizes under your hand); sitting on the default just tones it down ---- */
 .slider-wrap output,
 .setting-line.slider-line .slider-wrap output{
-  flex:none;min-width:62px;width:auto;padding:5px 12px;border-radius:999px;text-align:center;
+  flex:none;box-sizing:border-box;width:72px;min-width:72px;padding:5px 0;border-radius:999px;text-align:center;
   font-family:var(--font);font-size:13px;font-weight:600;line-height:1.25;letter-spacing:0;
-  font-variant-numeric:tabular-nums;white-space:nowrap;
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;
   color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-soft2);
 }
+.slider-wrap output.is-default{color:var(--text-dim);background:transparent;border-color:var(--border);font-weight:500;}
 
-/* ---- Corner player: the resize corners sit on the player's real corners, outside it, following its rounded shape ---- */
+/* ---- Corner player: resize corners sit on the player's real corners, outside it, following its rounded shape;
+   the four edges resize too. The grab areas are mostly outside the player so they never get in the way of its controls ---- */
 .video-dock.mini{overflow:visible;}
 .video-dock.mini iframe{border-radius:calc(var(--radius) - 1px);}
 .video-dock.mini .mp-bar{border-radius:calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;}
-.video-dock.mini .mp-resize{
-  display:block;position:absolute;z-index:3;opacity:0;transition:opacity .15s;
-  width:calc(var(--radius) + 22px);height:calc(var(--radius) + 22px);
+.video-dock.mini .mp-resize{display:block;position:absolute;z-index:3;}
+.video-dock.mini .mp-resize:not(.mp-edge){width:calc(var(--radius) + 31px);height:calc(var(--radius) + 31px);}
+.mp-resize:not(.mp-edge)::after{
+  content:'';position:absolute;pointer-events:none;border:0 solid var(--accent);
+  opacity:0;transition:opacity .15s,border-color .12s;
 }
-.video-dock.mini:hover .mp-resize,.video-dock.dragging .mp-resize{opacity:1;}
-/* each corner is an L-shaped grab area (so it never covers the buttons on the bar), with a rounded arc that
-   follows the player's own corner, a few pixels out from it */
-.mp-resize::after{
-  content:'';position:absolute;inset:0;pointer-events:none;border:0 solid var(--accent);
-  transition:border-color .12s;
-}
+.video-dock.mini:hover .mp-resize::after,.video-dock.dragging .mp-resize::after{opacity:1;}
 .mp-resize:hover::after{border-color:var(--text);}
-.mp-resize[data-edge="tl"]{left:-6px;top:-6px;cursor:nwse-resize;clip-path:polygon(0 0,100% 0,100% 12px,12px 12px,12px 100%,0 100%);}
-.mp-resize[data-edge="tr"]{right:-6px;top:-6px;cursor:nesw-resize;clip-path:polygon(0 0,100% 0,100% 100%,calc(100% - 12px) 100%,calc(100% - 12px) 12px,0 12px);}
-.mp-resize[data-edge="bl"]{left:-6px;bottom:-6px;cursor:nesw-resize;clip-path:polygon(0 0,12px 0,12px calc(100% - 12px),100% calc(100% - 12px),100% 100%,0 100%);}
-.mp-resize[data-edge="br"]{right:-6px;bottom:-6px;cursor:nwse-resize;clip-path:polygon(100% 0,100% 100%,0 100%,0 calc(100% - 12px),calc(100% - 12px) calc(100% - 12px),calc(100% - 12px) 0);}
-.mp-resize[data-edge="tl"]::after{border-left-width:3px;border-top-width:3px;border-top-left-radius:calc(var(--radius) + 5px);}
-.mp-resize[data-edge="tr"]::after{border-right-width:3px;border-top-width:3px;border-top-right-radius:calc(var(--radius) + 5px);}
-.mp-resize[data-edge="bl"]::after{border-left-width:3px;border-bottom-width:3px;border-bottom-left-radius:calc(var(--radius) + 5px);}
-.mp-resize[data-edge="br"]::after{border-right-width:3px;border-bottom-width:3px;border-bottom-right-radius:calc(var(--radius) + 5px);}
+/* each corner: an L-shaped grab area 22px wide, 16px of it outside the player */
+.mp-resize[data-edge="tl"]{left:-15px;top:-15px;cursor:nwse-resize;clip-path:polygon(0 0,100% 0,100% 22px,22px 22px,22px 100%,0 100%);}
+.mp-resize[data-edge="tr"]{right:-15px;top:-15px;cursor:nesw-resize;clip-path:polygon(0 0,100% 0,100% 100%,calc(100% - 22px) 100%,calc(100% - 22px) 22px,0 22px);}
+.mp-resize[data-edge="bl"]{left:-15px;bottom:-15px;cursor:nesw-resize;clip-path:polygon(0 0,22px 0,22px calc(100% - 22px),100% calc(100% - 22px),100% 100%,0 100%);}
+.mp-resize[data-edge="br"]{right:-15px;bottom:-15px;cursor:nwse-resize;clip-path:polygon(100% 0,100% 100%,0 100%,0 calc(100% - 22px),calc(100% - 22px) calc(100% - 22px),calc(100% - 22px) 0);}
+/* the arc hugs the player's own corner, 5px out from it */
+.mp-resize[data-edge="tl"]::after{left:11px;top:11px;right:0;bottom:0;border-left-width:3px;border-top-width:3px;border-top-left-radius:calc(var(--radius) + 5px);}
+.mp-resize[data-edge="tr"]::after{right:11px;top:11px;left:0;bottom:0;border-right-width:3px;border-top-width:3px;border-top-right-radius:calc(var(--radius) + 5px);}
+.mp-resize[data-edge="bl"]::after{left:11px;bottom:11px;right:0;top:0;border-left-width:3px;border-bottom-width:3px;border-bottom-left-radius:calc(var(--radius) + 5px);}
+.mp-resize[data-edge="br"]::after{right:11px;bottom:11px;left:0;top:0;border-right-width:3px;border-bottom-width:3px;border-bottom-right-radius:calc(var(--radius) + 5px);}
+/* edges: thin invisible strips between the corners */
+.mp-resize[data-edge="t"]{left:calc(var(--radius) + 16px);right:calc(var(--radius) + 16px);top:-15px;height:20px;cursor:ns-resize;}
+.mp-resize[data-edge="b"]{left:calc(var(--radius) + 16px);right:calc(var(--radius) + 16px);bottom:-15px;height:20px;cursor:ns-resize;}
+.mp-resize[data-edge="l"]{top:calc(var(--radius) + 16px);bottom:calc(var(--radius) + 16px);left:-15px;width:20px;cursor:ew-resize;}
+.mp-resize[data-edge="r"]{top:calc(var(--radius) + 16px);bottom:calc(var(--radius) + 16px);right:-15px;width:20px;cursor:ew-resize;}
+
+/* ---- Smoother scrolling: no animated backdrop, and no per-frame glass blur on settings cards, while the page moves ---- */
+body.is-scrolling .page-bg{animation-play-state:paused !important;}
+body.glassy .settings-card{backdrop-filter:none;-webkit-backdrop-filter:none;background:color-mix(in srgb,var(--bg2) 90%,transparent);}
+
+/* ---- Settings search ---- */
+.settings-search{position:relative;display:flex;align-items:center;margin:14px 0 2px;max-width:520px;}
+.settings-search > svg{position:absolute;left:14px;width:16px;height:16px;color:var(--text-dim);pointer-events:none;}
+.settings-search input{
+  width:100%;box-sizing:border-box;height:38px;padding:0 40px 0 40px;border-radius:999px;
+  background:var(--panel);border:1px solid var(--border);color:var(--text);
+  font-family:var(--font);font-size:13.5px;outline:none;
+}
+.settings-search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.settings-search-clear{
+  position:absolute;right:7px;width:26px;height:26px;padding:0;border:0;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;background:transparent;color:var(--text-dim);cursor:pointer;
+}
+.settings-search-clear[hidden]{display:none;}
+.settings-search-clear:hover{background:var(--glass-hi);color:var(--text);}
+.settings-search-clear svg{width:14px;height:14px;}
+.settings-no-results{margin:12px 4px 0;font-size:13px;color:var(--text-dim);}
+.settings-no-results[hidden]{display:none;}
+.search-hide{display:none !important;}
