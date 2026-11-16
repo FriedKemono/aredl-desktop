@@ -7,6 +7,18 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
+    version: '1.0.10',
+    title: 'Song menu, foldable level buttons and smoother scrolling',
+    items: [
+      ['new', 'A music button next to the other buttons on a level opens a song menu: search the song on YouTube or Spotify, open it on Newgrounds, or copy its name or ID. Spotify opens straight in the Spotify app when you have it installed (the website otherwise). The song’s name is only looked up when you click the button, and remembered after that.'],
+      ['new', 'The row of buttons next to a level’s name (follow, copy link, open, YouTube, song) can be folded away to just its arrow, and unfolded again. They start unfolded, and your choice is remembered.'],
+      ['new', 'The small bar in multi-select now has the follow-level and song buttons too, and folds the same way.'],
+      ['improved', 'Favourites no longer show a level’s tags, and the points and EDEL chips are bigger and easier to read.'],
+      ['improved', 'Smoother scrolling: the Shader backdrop does its blurring while it draws instead of making your graphics card blur the whole window every frame, and the backdrop holds still while you are on Settings.'],
+      ['fixed', 'Spotify searches no longer show stray “+-+” between the words: the song’s name and artist are tidied before searching.'],
+    ],
+  },
+  {
     version: '1.0.9',
     title: 'Settings search, smoother scrolling and an easier corner player',
     items: [

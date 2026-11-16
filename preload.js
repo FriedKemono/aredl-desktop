@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('aredl', {
   getClearedNotifications: () => ipcRenderer.invoke('notifications:getCleared'),
   setClearedNotifications: (ids) => ipcRenderer.invoke('notifications:setCleared', ids),
   getNotifications: () => ipcRenderer.invoke('api:getNotifications'),
+  getSongInfo: (id, opts) => ipcRenderer.invoke('song:getInfo', id, opts),
+  openSpotifySearch: (query) => ipcRenderer.invoke('song:openSpotify', query),
 
   authStatus: () => ipcRenderer.invoke('auth:getStatus'),
   signIn: (key) => ipcRenderer.invoke('auth:setKey', key),

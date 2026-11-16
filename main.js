@@ -471,6 +471,125 @@ ipcMain.handle('store:set', async (_e, name, data) => {
   return true;
 });
 
+// ---- Song names ----
+// Looked up only when the music button on a level is clicked, never in the background. The name comes from the song's
+// Newgrounds page; the Geometry Dash server is asked at the same time as a backup (and for the artist if the page
+// doesn't give one). Every successful lookup is remembered on disk, so each song is only ever fetched once.
+const SONG_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const songCachePath = () => path.join(userDataDir(), 'song-names.json');
+let songCache = null;
+function loadSongCache() {
+  if (songCache) return songCache;
+  try {
+    const data = JSON.parse(fs.readFileSync(songCachePath(), 'utf8'));
+    songCache = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  } catch { songCache = {}; }
+  return songCache;
+}
+function saveSongCache() { try { fs.writeFileSync(songCachePath(), JSON.stringify(songCache)); } catch { /* the name still shows this session */ } }
+function decodeEntities(str) {
+  return String(str)
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d)))
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ').trim();
+}
+function metaContent(html, prop) {
+  const a = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*?content=["']([^"']*)["']`, 'i').exec(html);
+  if (a) return decodeEntities(a[1]);
+  const b = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*?(?:property|name)=["']${prop}["']`, 'i').exec(html);
+  return b ? decodeEntities(b[1]) : '';
+}
+async function fetchNewgroundsSong(id) {
+  const res = await fetch(`https://www.newgrounds.com/audio/listen/${id}`, {
+    headers: { 'User-Agent': SONG_UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en-US,en;q=0.8' },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(9000),
+  });
+  if (res.status === 404) throw new Error('That song is not on Newgrounds (removed?)');
+  if (!res.ok) throw new Error(`Newgrounds answered ${res.status}`);
+  const html = await res.text();
+  let name = '', artist = '';
+  // structured data first, when the page has it
+  for (const mt of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const walk = (o) => {
+        if (!o || typeof o !== 'object') return;
+        if (Array.isArray(o)) { o.forEach(walk); return; }
+        if (!name && typeof o.name === 'string' && (o.byArtist || o.author || /Music|Audio/i.test(String(o['@type'] || '')))) {
+          name = decodeEntities(o.name);
+          const who = o.byArtist || o.author;
+          artist = decodeEntities(typeof who === 'string' ? who : (who && who.name) || '');
+        }
+        Object.values(o).forEach(walk);
+      };
+      walk(JSON.parse(mt[1]));
+    } catch { /* not JSON we can use */ }
+  }
+  if (!name) name = metaContent(html, 'og:title') || metaContent(html, 'twitter:title');
+  if (!name) { const t = /<title[^>]*>([^<]*)<\/title>/i.exec(html); if (t) name = decodeEntities(t[1]); }
+  name = name.replace(/\s*[-|–]\s*Newgrounds(\.com)?\s*$/i, '').replace(/\s+on Newgrounds\s*$/i, '').trim();
+  if (!artist) artist = metaContent(html, 'og:audio:artist') || metaContent(html, 'music:musician_name') || metaContent(html, 'author');
+  if (!name) throw new Error('Could not find the song name on its Newgrounds page');
+  return { name, artist };
+}
+// Geometry Dash's own song lookup - the reply is "key~|~value~|~key~|~value...", with 2 = name and 4 = artist.
+async function fetchGdSong(id) {
+  const res = await fetch('https://www.boomlings.com/database/getGJSongInfo.php', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': '' },
+    body: `songID=${id}&secret=Wmfd2893gb7`,
+    signal: AbortSignal.timeout(7000),
+  });
+  const text = (await res.text()).trim();
+  if (!res.ok || !text.includes('~|~')) throw new Error('The game server has no such song');
+  const parts = text.split('~|~'), map = {};
+  for (let i = 0; i + 1 < parts.length; i += 2) map[parts[i]] = parts[i + 1];
+  return { name: decodeEntities(map['2'] || ''), artist: decodeEntities(map['4'] || '') };
+}
+const songInflight = new Map();
+async function lookupSong(id, force = false) {
+  const cache = loadSongCache();
+  if (cache[id] && !force) return { ok: true, id, ...cache[id] };
+  const gdP = fetchGdSong(id).catch(() => ({}));
+  let ng = {}, ngErr = null;
+  try { ng = await fetchNewgroundsSong(id); } catch (err) { ngErr = err; }
+  let name = ng.name, artist = ng.artist;
+  if (!name || !artist) { const gd = await gdP; name = name || gd.name; artist = artist || gd.artist; }
+  if (!name) {
+    if (cache[id]) return { ok: true, id, ...cache[id] }; // asked again and couldn't: the earlier answer still stands
+    return { ok: false, id, error: ngErr ? ngErr.message : 'Song not found' };
+  }
+  cache[id] = { name, artist: artist || '' };
+  saveSongCache();
+  return { ok: true, id, ...cache[id] };
+}
+// Spotify: if the Spotify app is installed, search inside it (spotify:search:...); otherwise the search opens on the web.
+// Only this fixed kind of link is ever built here - the renderer just sends the words to search for.
+ipcMain.handle('song:openSpotify', async (_e, query) => {
+  const q = String(query || '').trim().slice(0, 200);
+  if (!q) return { ok: false };
+  try {
+    if (typeof app.getApplicationInfoForProtocol === 'function') {
+      const info = await app.getApplicationInfoForProtocol('spotify:');
+      if (info && (info.name || info.path)) {
+        await shell.openExternal(`spotify:search:${encodeURIComponent(q)}`);
+        return { ok: true, inApp: true };
+      }
+    }
+  } catch { /* nothing is registered for spotify: links - use the web */ }
+  openExternalSafe(`https://open.spotify.com/search/${encodeURIComponent(q)}`);
+  return { ok: true, inApp: false };
+});
+ipcMain.handle('song:getInfo', async (_e, rawId, opts) => {
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0 || id > 1e9) return { ok: false, error: 'Invalid song ID' };
+  const force = !!(opts && opts.force);
+  const key = `${id}:${force}`;
+  if (!songInflight.has(key)) songInflight.set(key, lookupSong(id, force).finally(() => songInflight.delete(key)));
+  try { return await songInflight.get(key); } catch (err) { return { ok: false, id, error: err.message || 'Lookup failed' }; }
+});
+
 ipcMain.handle('settings:get', async () => loadSettings());
 ipcMain.handle('settings:set', async (_e, patch) => saveSettings(patch && typeof patch === 'object' ? patch : {}));
 

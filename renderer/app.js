@@ -103,6 +103,7 @@ function showTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === `tab-${name}`));
   if (name !== 'list') abortRecords(); // stop fetching records for a level you're no longer looking at
   else renderRecordsFooter();
+  document.body.dataset.tab = name;
   pauseAllVideos(); // whatever was playing on the tab we're leaving is no longer visible
   try { [...docks].forEach(d => d.layout()); } catch { /* players not set up yet */ } // hide / move players now, not a frame later
   if (name === 'changelog' && !state.changelogLoaded) loadChangelog(true);
@@ -980,6 +981,7 @@ function applyBgBright() {
   slider.value = eff;
   $('#bgBrightOut').textContent = `${eff}%`;
   $('#bgBrightReset').disabled = custom == null;
+  try { shaderKick(); } catch { /* shader not set up yet */ }
 }
 $('#bgBrightSlider').addEventListener('input', () => {
   const v = Number($('#bgBrightSlider').value);
@@ -1024,6 +1026,7 @@ function applyAppearance() {
   applyBgBright();
   applyBgToggles();
   applyShaderTuning();
+  applyToolsState();
 }
 
 async function initSettings() {
@@ -1057,10 +1060,13 @@ async function initSettings() {
   document.documentElement.classList.remove('booting');
 }
 
+// counts the clicks on any Refresh button; a song name is only looked up again if one of these happened since it was last looked up
+let refreshEpoch = 0;
 function wireRefreshButton(id, fn) {
   const btn = document.getElementById(id);
   if (!btn) return;
   btn.addEventListener('click', async () => {
+    refreshEpoch++;
     btn.classList.add('spinning');
     try { await fn(); } finally { setTimeout(() => btn.classList.remove('spinning'), 500); }
   });
@@ -1862,11 +1868,8 @@ function renderFavourites() {
     pills.push(completed
       ? `<span class="fav-pill done">✓ Completed</span>`
       : `<button class="fav-pill fav-label" data-fav-label="${escapeHtml(r.level_id)}" style="--c:${lab.color}" title="Change what this favourite is for"><i class="dot"></i>${escapeHtml(lab.name)}<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l5 5 5-5"/></svg></button>`);
-    if (l && l.points != null) pills.push(`<span class="fav-pill">${escapeHtml(formatPoints(l.points))} pts</span>`);
-    if (l && l.edel_enjoyment != null) pills.push(`<span class="fav-pill">EDEL ${escapeHtml(enjText(l))}</span>`);
-    const tags = l ? (l.tags || []) : [];
-    const tagHtml = tags.slice(0, 4).map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')
-      + (tags.length > 4 ? `<span class="tag">+${tags.length - 4}</span>` : '');
+    if (l && l.points != null) pills.push(`<span class="fav-pill stat pts" title="Points"><b>${escapeHtml(formatPoints(l.points))}</b><small>pts</small></span>`);
+    if (l && l.edel_enjoyment != null) pills.push(`<span class="fav-pill stat edel" title="EDEL enjoyment rating"><small>EDEL</small><b>${escapeHtml(enjText(l))}</b></span>`);
     const pubName = l && l.publisher_id != null ? publisherNames.get(String(l.publisher_id)) : null;
     return `<div class="fav-card${completed ? ' completed' : ''}" style="--c:${completed ? '#4ade80' : lab.color}" data-level-id="${escapeHtml(r.level_id)}" data-jump="${escapeHtml(r.level_id)}">
       <button class="fav-remove" data-fav-remove="${escapeHtml(r.level_id)}" title="Remove from favourites" aria-label="Remove from favourites">${starSvg('fav-star')}</button>
@@ -1874,7 +1877,6 @@ function renderFavourites() {
       <div class="fav-card-name">${escapeHtml(r.name)}</div>
       ${pubName ? `<div class="fav-card-by">by ${escapeHtml(pubName)}</div>` : ''}
       ${pills.length ? `<div class="fav-pills">${pills.join('')}</div>` : ''}
-      ${tagHtml ? `<div class="fav-tags">${tagHtml}</div>` : ''}
       <div class="fav-card-foot">
         <span class="fav-card-id copyable" data-copy="${escapeHtml(r.level_id)}" data-copy-label="Level ID" title="Click to copy">ID ${escapeHtml(r.level_id)}</span>
         ${levelToolsHtml({ level_id: r.level_id, name: r.name, mode: r.mode })}
@@ -3005,12 +3007,24 @@ function hideContextMenu() {
   setTimeout(() => m.remove(), 140);
 }
 
-function showContextMenu(x, y, items) {
-  hideContextMenu();
+function showContextMenu(x, y, items, opts = {}) {
+  // `instant` swaps the open menu for a new one in place, with no closing / opening animation (used when a menu's contents update)
+  if (opts.instant) { const old = document.getElementById('ctxMenu'); if (old) old.remove(); } else hideContextMenu();
   const menu = document.createElement('div');
   menu.id = 'ctxMenu';
-  menu.className = 'ctx-menu';
+  menu.className = 'ctx-menu' + (opts.instant ? ' no-anim' : '');
+  if (opts.owner) menu.dataset.owner = opts.owner;
   items.forEach(item => {
+    if (item.header) { // a line of text, not a button
+      const head = document.createElement('div');
+      head.className = 'ctx-head' + (item.dim ? ' dim' : '');
+      const strong = document.createElement('strong');
+      strong.textContent = item.header;
+      head.appendChild(strong);
+      if (item.sub) { const sub = document.createElement('small'); sub.textContent = item.sub; head.appendChild(sub); }
+      menu.appendChild(head);
+      return;
+    }
     if (item.separator) {
       const sep = document.createElement('div');
       sep.className = 'ctx-sep';
@@ -3032,7 +3046,9 @@ function showContextMenu(x, y, items) {
       tick.textContent = '✓';
       btn.appendChild(tick);
     }
+    if (item.disabled) btn.disabled = true;
     btn.addEventListener('click', () => {
+      if (item.keepOpen) { item.onClick(); return; }
       hideContextMenu();
       item.onClick();
     });
@@ -3045,6 +3061,74 @@ function showContextMenu(x, y, items) {
   menu.style.left = Math.max(10, Math.min(x, window.innerWidth - r.width - 10)) + 'px';
   menu.style.top = Math.max(10, Math.min(y, window.innerHeight - r.height - 10)) + 'px';
 }
+
+// ---- The music button on a level: search the song on YouTube / Spotify, or open it on Newgrounds ----
+// Nothing is fetched until the button is clicked; the name is then looked up once and remembered.
+const songInfoCache = new Map(); // song id -> { info: { name, artist } or null, error, epoch (the refresh count it was looked up at) }
+let songMenuToken = 0;
+// the words to search for: name + artist, without the stray " - " that titles like "Artist - Song" carry
+const songSearchWords = (info) => [info.name, info.artist].filter(Boolean).join(' ').replace(/\s+[-–—|]+\s+/g, ' ').replace(/\s+/g, ' ').trim();
+const songNgUrl = (id) => `https://www.newgrounds.com/audio/listen/${id}`;
+function songMenuItems(id, info, { retry } = {}) {
+  const open = (url) => () => window.open(url, '_blank', 'noopener');
+  const q = info ? encodeURIComponent(songSearchWords(info)) : '';
+  const ng = { label: 'Open in Newgrounds', onClick: open(songNgUrl(id)) };
+  if (info === 'loading') return [
+    { header: 'Looking up the song…', dim: true },
+    { label: 'Search on YouTube', disabled: true, onClick() {} },
+    { label: 'Search on Spotify', disabled: true, onClick() {} },
+    ng,
+  ];
+  if (!info) return [
+    { header: 'Couldn’t get the song name', sub: retry && retry.error ? retry.error : 'Check your connection and try again', dim: true },
+    { label: 'Try again', onClick: retry.run },
+    ng,
+    { separator: true },
+    { label: 'Copy song ID', onClick: () => copyText(id, 'Song ID') },
+  ];
+  return [
+    { header: info.name, sub: info.artist ? `by ${info.artist}` : '' },
+    { separator: true },
+    { label: 'Search on YouTube', onClick: open(`https://www.youtube.com/results?search_query=${q}`) },
+    { label: 'Search on Spotify', onClick: () => { window.aredl.openSpotifySearch(songSearchWords(info)).catch(() => {}); } }, // opens the Spotify app if it's installed, the website if not
+    ng,
+    { separator: true },
+    { label: 'Copy song name', onClick: () => copyText(info.name, 'Song name') },
+    { label: 'Copy song ID', onClick: () => copyText(id, 'Song ID') },
+  ];
+}
+// A song never changes, so each one is looked up once and the answer (or the failure) is kept. It is only looked
+// up again when a Refresh has happened since, or when you press "Try again".
+async function openSongMenu(btn, { force = false } = {}) {
+  const id = btn.dataset.songMenu;
+  const r = btn.getBoundingClientRect();
+  const x = r.left, y = r.bottom + 6;
+  const token = ++songMenuToken, owner = `song:${token}`;
+  const show = (items, instant) => showContextMenu(x, y, items, { owner, instant });
+  const stillOpen = () => { const m = document.getElementById('ctxMenu'); return !!m && m.dataset.owner === owner; };
+  const retry = (error) => ({ retry: { run: () => { openSongMenu(btn, { force: true }); }, error } });
+  const entry = songInfoCache.get(id);
+  if (entry && entry.epoch === refreshEpoch && !force) { // answered since the last refresh: nothing to fetch
+    show(songMenuItems(id, entry.info, retry(entry.error)));
+    return;
+  }
+  const epoch = refreshEpoch;
+  const recheck = force || !!entry; // after a refresh (or "Try again") ask again instead of trusting what was saved
+  show(songMenuItems(id, 'loading'));
+  let res;
+  try { res = await window.aredl.getSongInfo(Number(id), { force: recheck }); } catch (err) { res = { ok: false, error: err.message }; }
+  // remember the answer even if the menu was closed while it loaded
+  songInfoCache.set(id, res && res.ok
+    ? { info: { name: res.name, artist: res.artist }, epoch }
+    : { info: null, error: res && res.error, epoch });
+  if (!stillOpen()) return; // closed (or replaced) while it was loading
+  const done = songInfoCache.get(id);
+  show(songMenuItems(id, done.info, retry(done.error)), true);
+}
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-song-menu]');
+  if (btn) { e.preventDefault(); openSongMenu(btn); }
+});
 
 document.addEventListener('contextmenu', (e) => {
   const row = e.target.closest('.list-row, .fav-card, .follow-card');
@@ -3213,6 +3297,7 @@ function applyBgBlur() {
   slider.value = eff;
   $('#bgBlurOut').textContent = `${eff}px`;
   $('#bgBlurReset').disabled = custom == null;
+  try { shaderKick(); } catch { /* shader not set up yet */ }
 }
 $('#bgBlurSlider').addEventListener('input', () => {
   const v = Number($('#bgBlurSlider').value);
@@ -3340,7 +3425,10 @@ function shaderRegions(vid) {
   });
 }
 function shaderEnsure() {
-  if (!shader.cv) { shader.cv = document.getElementById('shaderBg'); shader.ctx = shader.cv.getContext('2d'); }
+  if (!shader.cv) {
+    shader.cv = document.getElementById('shaderBg'); shader.ctx = shader.cv.getContext('2d');
+    shader.off = document.createElement('canvas'); shader.offCtx = shader.off.getContext('2d'); // the bubbles are drawn here, then copied across with the blur / colour filter
+  }
   if (!shader.cur) { const d = shaderDefaultColours(); shader.cur = Float32Array.from(d); shader.from = Float32Array.from(d); shader.to = Float32Array.from(d); shader.fadeStart = -1e9; }
   if (!shader.bubbles) {
     const rnd = (i, k) => { const x = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453; return x - Math.floor(x); };
@@ -3354,8 +3442,10 @@ function shaderEnsure() {
 }
 function shaderResize() {
   if (!shader.cv) return;
-  shader.cv.width = Math.max(32, Math.round((window.innerWidth + SHADER_MARGIN * 2) / SHADER_SCALE));
-  shader.cv.height = Math.max(24, Math.round((window.innerHeight + SHADER_MARGIN * 2) / SHADER_SCALE));
+  const w = Math.max(32, Math.round((window.innerWidth + SHADER_MARGIN * 2) / SHADER_SCALE));
+  const h = Math.max(24, Math.round((window.innerHeight + SHADER_MARGIN * 2) / SHADER_SCALE));
+  shader.cv.width = shader.off.width = w;
+  shader.cv.height = shader.off.height = h;
   shader.dirty = true;
 }
 // a new level: blend from the colours on screen to its colours
@@ -3385,7 +3475,7 @@ function shaderFrame(now) {
   shader.last = now;
   shader.dirty = false;
   shader.clock += dt * shader.speed; // time only advances at the chosen speed, so changing it never makes the bubbles jump
-  const { ctx, cv, cur, from, to, bubbles } = shader;
+  const { offCtx: ctx, off: cv, cur, from, to, bubbles } = shader;
   const k = Math.min(1, (now - shader.fadeStart) / SHADER_FADE_MS), e = k * k * (3 - 2 * k);
   for (let i = 0; i < cur.length; i++) cur[i] = from[i] + (to[i] - from[i]) * e;
   const W = cv.width, H = cv.height, t = shader.clock;
@@ -3408,6 +3498,22 @@ function shaderFrame(now) {
     ctx.fillStyle = g;
     ctx.fillRect(x - r, y - r, r * 2, r * 2);
   }
+  // blur, brightness and saturation are applied here, on this small canvas, once per frame. As a CSS filter on the
+  // screen-sized canvas the graphics card had to blur a whole window's worth of pixels on every frame (and every
+  // scroll), which is what made busy pages like Settings stutter.
+  const vctx = shader.ctx;
+  vctx.globalCompositeOperation = 'source-over';
+  vctx.filter = shaderFilter();
+  vctx.drawImage(shader.off, 0, 0);
+  vctx.filter = 'none';
+}
+function shaderFilter() {
+  const glass = document.body.classList.contains('glassy');
+  const blurCss = (Number.isFinite(appSettings.bgBlur) ? appSettings.bgBlur : bgBlurDefault()) * 0.5;
+  const bright = (Number.isFinite(appSettings.bgBright) ? appSettings.bgBright : bgBrightDefault()) / 100;
+  const sat = (glass ? 1.5 : 1.1) * shader.intensity;
+  const b = blurCss / SHADER_SCALE; // the canvas is drawn at 1/SHADER_SCALE of real size
+  return `${b >= 0.3 ? `blur(${b.toFixed(2)}px) ` : ''}brightness(${bright}) saturate(${sat.toFixed(3)})`;
 }
 // run only while it can actually be seen
 function shaderSync() {
@@ -3471,20 +3577,47 @@ function videoStageHtml(multi) {
 function youtubeSearchUrl(name) {
   return 'https://www.youtube.com/results?search_query=' + String(name || '').trim().split(/\s+/).map(encodeURIComponent).join('+') + '+gd';
 }
-function levelToolsHtml(level, { follow = false } = {}) {
+function levelToolsHtml(level, { follow = false, song = false } = {}) {
   const id = level.level_id;
   const yt = youtubeSearchUrl(level.name);
   const icon = (d) => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const followBtn = follow && id != null
     ? `<button class="icon-tool follow-btn${isFollowing(id) ? ' active' : ''}" data-tip="${isFollowing(id) ? 'Unfollow level' : 'Follow level'}" data-follow-toggle="${escapeHtml(String(id))}" aria-label="Follow level">${icon('<path d="M5.5 8a4.5 4.5 0 0 1 9 0c0 4 1.5 5 1.5 5H4s1.5-1 1.5-5Z"/><path d="M8.5 16a1.7 1.7 0 0 0 3 0"/>')}</button>`
     : '';
+  // the song's name is only looked up when this is clicked (see openSongMenu)
+  const songBtn = song && Number(level.song) > 0
+    ? `<button class="icon-tool" data-tip="Song options" data-song-menu="${escapeHtml(String(level.song))}" aria-label="Song options" aria-haspopup="menu">${icon('<path d="M8 15V5.2l8-1.7V13"/><circle cx="6" cy="15" r="2"/><circle cx="14" cy="13" r="2"/>')}</button>`
+    : '';
+  const expanded = appSettings.toolsExpanded !== false;
   return `<span class="title-tools">
+    <button class="icon-tool tools-toggle" data-tools-toggle data-tip="Show / hide buttons" aria-label="Show or hide the buttons" aria-expanded="${expanded}">${icon('<path d="M12 5l-5 5 5 5"/>')}</button>
+    <span class="tools-items">
     ${followBtn}
     ${id != null ? `<button class="icon-tool" data-tip="Copy AREDL link" data-copy-aredl="${escapeHtml(String(id))}" data-copy-mode="${modeOfLevel(level)}" aria-label="Copy AREDL link">${icon('<path d="M8.5 11.5a3.2 3.2 0 0 0 4.5 0l2.6-2.6a3.2 3.2 0 0 0-4.5-4.5l-.9.9"/><path d="M11.5 8.5a3.2 3.2 0 0 0-4.5 0l-2.6 2.6a3.2 3.2 0 0 0 4.5 4.5l.9-.9"/>')}</button>
     <a class="icon-tool" data-tip="Open in AREDL" href="${escapeHtml(levelWebUrl(id, modeOfLevel(level)))}" target="_blank" rel="noopener" aria-label="Open in AREDL">${icon('<path d="M11 4h5v5"/><path d="M16 4l-7 7"/><path d="M14 11.5V15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5"/>')}</a>` : ''}
     <a class="icon-tool" data-tip="Search on YouTube" href="${escapeHtml(yt)}" target="_blank" rel="noopener" aria-label="Search on YouTube">${icon('<rect x="2.5" y="5" width="15" height="10" rx="3"/><path d="M8.5 7.8v4.4l3.8-2.2z" fill="currentColor"/>')}</a>
+    ${songBtn}
+    </span>
   </span>`;
 }
+// The row of buttons next to a level's name can be folded away to just its arrow. One choice for every level
+// and card, remembered between sessions; expanded unless you fold it.
+let toolsAnimTimer = null;
+function applyToolsState() {
+  const expanded = appSettings.toolsExpanded !== false;
+  document.body.classList.toggle('tools-collapsed', !expanded);
+  document.querySelectorAll('[data-tools-toggle]').forEach(b => b.setAttribute('aria-expanded', String(expanded)));
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tools-toggle]');
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  setSetting('toolsExpanded', appSettings.toolsExpanded === false);
+  document.body.classList.add('tools-anim');
+  clearTimeout(toolsAnimTimer);
+  toolsAnimTimer = setTimeout(() => document.body.classList.remove('tools-anim'), 320);
+  applyToolsState();
+}, true);
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-copy-aredl]');
   if (btn) copyText(levelWebUrl(btn.dataset.copyAredl, btn.dataset.copyMode), 'AREDL link');
@@ -3586,7 +3719,7 @@ function selectLevel(level, { force = false } = {}) {
   const levelIdHtml = levelIdHtmlFor(level);
 
   const detailHtml = `
-    <h2 class="detail-title">${level.position != null ? `<span class="title-pos">#${level.position}</span><span class="title-divider"></span>` : ''}${escapeHtml(level.name)}${levelToolsHtml(level, { follow: true })}</h2>
+    <h2 class="detail-title">${level.position != null ? `<span class="title-pos">#${level.position}</span><span class="title-divider"></span>` : ''}${escapeHtml(level.name)}${levelToolsHtml(level, { follow: true, song: true })}</h2>
     <div class="detail-inner">
       ${videoStageHtml(false)}
       <p class="detail-desc">${desc}</p>
@@ -3669,7 +3802,7 @@ function updateMultiCaption(i) {
   const l = multiOrder[i];
   const el = document.getElementById('multiCaption');
   if (!l || !el) return;
-  el.innerHTML = `${l.position != null ? `<span class="multi-caption-pos">#${l.position}</span>` : ''}<span class="multi-caption-name">${escapeHtml(l.name)}</span>${levelToolsHtml(l)}<span class="multi-caption-count">${i + 1} / ${multiOrder.length}</span>`;
+  el.innerHTML = `${l.position != null ? `<span class="multi-caption-pos">#${l.position}</span>` : ''}<span class="multi-caption-name">${escapeHtml(l.name)}</span>${levelToolsHtml(l, { follow: true, song: true })}<span class="multi-caption-count">${i + 1} / ${multiOrder.length}</span>`;
 }
 
 // Show one level of the selection in the video area; the background and the

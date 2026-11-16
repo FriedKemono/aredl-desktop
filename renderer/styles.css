@@ -2203,9 +2203,8 @@ body.nav-editing .nav-more-btn{cursor:grab;}
    ===================================================================== */
 .shader-bg{
   position:fixed;left:-90px;top:-90px;width:calc(100% + 180px);height:calc(100% + 180px);z-index:0;pointer-events:none;display:none;
-  filter:blur(calc(var(--bg-blur,60px) * .5)) brightness(var(--bg-bright,.32)) saturate(calc(1.1 * var(--sh-int,1)));
+  /* no CSS filter: blur, brightness and saturation are baked into the picture as it is drawn (see shaderFilter in app.js) */
 }
-body.glassy .shader-bg{filter:blur(calc(var(--bg-blur,54px) * .5)) brightness(var(--bg-bright,.5)) saturate(calc(1.5 * var(--sh-int,1)));}
 body.bg-shader .shader-bg{display:block;}
 body.bg-shader .page-bg{display:none;}
 body.no-bg .shader-bg,body.lite .shader-bg{display:none;}
@@ -2235,7 +2234,8 @@ body.nav-editing .top-nav .nav-btn:active,body.nav-editing .nav-more-btn:active{
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;
   color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-soft2);
 }
-.slider-wrap output.is-default{color:var(--text-dim);background:transparent;border-color:var(--border);font-weight:500;}
+.slider-wrap output.is-default,
+.setting-line.slider-line .slider-wrap output.is-default{color:var(--text-dim);background:transparent;border-color:var(--border);font-weight:500;}
 
 /* ---- Corner player: resize corners sit on the player's real corners, outside it, following its rounded shape;
    the four edges resize too. The grab areas are mostly outside the player so they never get in the way of its controls ---- */
@@ -2289,3 +2289,36 @@ body.glassy .settings-card{backdrop-filter:none;-webkit-backdrop-filter:none;bac
 .settings-no-results{margin:12px 4px 0;font-size:13px;color:var(--text-dim);}
 .settings-no-results[hidden]{display:none;}
 .search-hide{display:none !important;}
+
+
+/* ---- Menus: text headers and disabled items (the song menu) ---- */
+.ctx-menu.no-anim{animation:none;}
+.ctx-head{display:flex;flex-direction:column;gap:2px;padding:7px 11px 5px;max-width:300px;overflow-wrap:anywhere;}
+.ctx-head strong{font-size:13px;font-weight:600;line-height:1.3;color:var(--text);}
+.ctx-head small{font-size:11.5px;line-height:1.3;color:var(--text-dim);}
+.ctx-head.dim strong{font-weight:500;color:var(--text-dim);}
+.ctx-item:disabled{opacity:.42;cursor:default;}
+.ctx-item:disabled:hover{background:none;color:var(--text);}
+
+/* Settings is a long page of text: the backdrop holds still there so scrolling it stays smooth */
+body[data-tab="settings"] .page-bg{animation-play-state:paused;}
+
+
+/* ---- Buttons next to a level's name: fold away to just the arrow ---- */
+.tools-items{display:inline-flex;align-items:center;gap:inherit;}
+body.tools-collapsed .tools-items{display:none;}
+.icon-tool.tools-toggle svg{transition:transform .22s ease;}
+body.tools-collapsed .icon-tool.tools-toggle svg{transform:rotate(180deg);}
+body.tools-anim:not(.tools-collapsed) .tools-items{animation:toolsIn .24s ease;}
+@keyframes toolsIn{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:none;}}
+
+/* ---- Favourite cards: points and EDEL you can actually read ---- */
+.fav-pill.stat{
+  display:inline-flex;align-items:baseline;gap:6px;padding:4px 12px;
+  font-family:var(--font);font-size:13px;font-weight:600;line-height:1.2;letter-spacing:0;
+  color:var(--text);background:var(--panel);border:1px solid var(--border);
+}
+.fav-pill.stat b{font-size:14px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--text);}
+.fav-pill.stat small{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);}
+.fav-pill.stat.pts{background:var(--accent-soft);border-color:var(--accent-soft2);}
+.fav-pill.stat.pts b{color:var(--accent);}
