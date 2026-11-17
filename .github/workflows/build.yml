@@ -1,4 +1,4 @@
-name: Build Windows exe
+name: Build Windows exe and Mac app
 
 on:
   push:
@@ -37,5 +37,42 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # the Mac app: built on a Mac runner, saved as a downloadable artifact on every push to the main branch
+  build-mac:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run dist:mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AREDL-Desktop-mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+
+  # a version tag: once the Windows release above exists, add the Mac downloads to the same release.
+  # The .dmg is the installer; the .zip is what installed Mac apps download to update themselves (see mac-updater.js).
+  release-mac:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run dist:mac
+      - run: gh release upload "${{ github.ref_name }}" dist/*.dmg dist/*.zip --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

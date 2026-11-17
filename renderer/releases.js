@@ -7,14 +7,16 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
-    version: '1.0.10',
-    title: 'Song menu, foldable level buttons and smoother scrolling',
+    version: '1.1.0',
+    title: 'Mac version, settings export & import, song menu and smoother scrolling',
     items: [
+      ['new', 'Export and import (Settings → Export & import). Choose what to take with you - your settings, favourites, followed levels, personal list and cleared notifications - then save it to a file or copy it as one line of text, and load it on another computer, Windows or Mac, in either direction. When importing you see what is inside and can only pick parts that are really there; lists can be added to what you have or replace it. Anything that doesn’t exist on the other computer (like Windows’ window button colours on a Mac) is skipped and listed, and an import can be undone. Your account and API key are never included.'],
       ['new', 'A music button next to the other buttons on a level opens a song menu: search the song on YouTube or Spotify, open it on Newgrounds, or copy its name or ID. Spotify opens straight in the Spotify app when you have it installed (the website otherwise). The song’s name is only looked up when you click the button, and remembered after that.'],
       ['new', 'The row of buttons next to a level’s name (follow, copy link, open, YouTube, song) can be folded away to just its arrow, and unfolded again. They start unfolded, and your choice is remembered.'],
       ['new', 'The small bar in multi-select now has the follow-level and song buttons too, and folds the same way.'],
       ['improved', 'Favourites no longer show a level’s tags, and the points and EDEL chips are bigger and easier to read.'],
       ['improved', 'Smoother scrolling: the Shader backdrop does its blurring while it draws instead of making your graphics card blur the whole window every frame, and the backdrop holds still while you are on Settings.'],
+      ['new', 'A Mac version. Every release now includes a .dmg installer for Mac (Apple Silicon and Intel), and the Mac app updates itself the same way the Windows installer does: it finds the new version, downloads it in the background and asks to restart. The Top bar setting works on Mac too, with the tabs in the title bar next to the red / yellow / green window buttons.'],
       ['fixed', 'Spotify searches no longer show stray “+-+” between the words: the song’s name and artist are tidied before searching.'],
     ],
   },

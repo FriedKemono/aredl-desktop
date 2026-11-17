@@ -373,10 +373,16 @@ function createWindow() {
     // Windows: hide the stock title bar and let the page draw its own, while
     // keeping the real window buttons (so snap layouts, double-click-to-maximise,
     // dragging and resizing all behave exactly as normal). Other platforms keep
-    // their normal frame.
+    // their normal frame (Mac: see below).
     ...(process.platform === 'win32' ? {
       titleBarStyle: 'hidden',
       titleBarOverlay: { ...(loadSettings().overlay || { color: '#00000000', symbolColor: '#a1a1aa' }), height: 36 },
+    } : {}),
+    // Mac: the same idea - the page draws the title bar, and the Mac's red / yellow / green window buttons stay,
+    // lined up in the middle of its 36px height.
+    ...(process.platform === 'darwin' ? {
+      titleBarStyle: 'hidden',
+      trafficLightPosition: { x: 14, y: 12 },
     } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -590,6 +596,186 @@ ipcMain.handle('song:getInfo', async (_e, rawId, opts) => {
   try { return await songInflight.get(key); } catch (err) { return { ok: false, id, error: err.message || 'Lookup failed' }; }
 });
 
+// ---- Export / import: settings, and the lists you keep (the rules live in settings-transfer.js) ----
+// Never included: the account / API key (credentials.bin is never read here).
+const transfer = require('./settings-transfer');
+const readList = (file) => { try { const d = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(d) ? d : []; } catch { return []; } };
+// the file each part lives in
+const TRANSFER_FILES = {
+  settings: settingsPath,
+  favourites: favouritesPath,
+  following: () => storePath('following'),
+  followNotifications: () => storePath('follow-notifications'),
+  personal: () => storePath('personal-list'),
+  notifications: clearedNotifsPath,
+};
+const FILES_OF = { // which files each part of an import touches
+  settings: ['settings'], favourites: ['favourites'], following: ['following', 'followNotifications'], personal: ['personal'], notifications: ['notifications'],
+};
+function gatherTransferSources() {
+  return {
+    settings: loadSettings(),
+    favourites: readList(TRANSFER_FILES.favourites()),
+    following: readList(TRANSFER_FILES.following()),
+    followNotifications: readList(TRANSFER_FILES.followNotifications()),
+    personal: readList(TRANSFER_FILES.personal()),
+    clearedNotifications: readList(TRANSFER_FILES.notifications()),
+  };
+}
+const pickSections = (list) => (Array.isArray(list) ? transfer.SECTION_IDS.filter(id => list.includes(id)) : []);
+const countLine = (doc) => transfer.SECTIONS
+  .filter(s => doc.sections.includes(s.id))
+  .map(s => {
+    const n = s.id === 'settings' ? Object.keys(doc.settings).length : s.id === 'following' ? (doc.data.following || []).length : (doc.data[s.id] || []).length;
+    return { id: s.id, label: s.label, count: n };
+  });
+
+// what there is here to export (for the "what to include" ticks)
+ipcMain.handle('transfer:info', async () => {
+  const c = transfer.countSources(gatherTransferSources());
+  return transfer.SECTIONS.map(s => ({ id: s.id, label: s.label, about: s.about, noun: s.noun, count: c[s.id], extra: s.id === 'following' ? c.followNotices : 0 }));
+});
+function buildTransferDoc(sections) {
+  const chosen = pickSections(sections);
+  if (!chosen.length) return null;
+  return transfer.buildExport(gatherTransferSources(), { platform: process.platform, appVersion: app.getVersion(), sections: chosen });
+}
+ipcMain.handle('transfer:exportText', async (_e, sections) => {
+  const doc = buildTransferDoc(sections);
+  if (!doc) return { ok: false, error: 'Tick at least one thing to include.' };
+  const text = transfer.toText(doc);
+  return { ok: true, text, included: countLine(doc), long: text.length > 150000 };
+});
+ipcMain.handle('transfer:exportFile', async (_e, sections) => {
+  const doc = buildTransferDoc(sections);
+  if (!doc) return { ok: false, error: 'Tick at least one thing to include.' };
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Export',
+    defaultPath: path.join(app.getPath('documents'), 'aredl-desktop-export.json'),
+    filters: [{ name: 'AREDL Desktop export', extensions: ['json'] }],
+  });
+  if (canceled || !filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(filePath, transfer.toJson(doc), 'utf8');
+    return { ok: true, path: filePath, included: countLine(doc) };
+  } catch (err) {
+    return { ok: false, error: `Couldn't save the file: ${err.message}` };
+  }
+});
+
+// Importing is two steps: look inside (and show what is there to pick from), then apply what was picked.
+let pendingImport = null;
+const PENDING_MS = 30 * 60 * 1000;
+function startTransferImport(text) {
+  let plan;
+  try {
+    plan = transfer.planImport(transfer.parseTransfer(text), { platform: process.platform });
+  } catch (err) {
+    return { ok: false, error: err instanceof transfer.TransferError ? err.message : 'That could not be read.' };
+  }
+  const preview = transfer.describePlan(plan);
+  if (!preview.sections.some(s => s.available)) {
+    const why = preview.sections.flatMap(s => s.skipped).map(s => s.label);
+    return { ok: false, error: why.length ? `Nothing in there can be used on this computer (${why.join(', ')}).` : 'There was nothing in there to import.' };
+  }
+  pendingImport = { plan, at: Date.now() };
+  return { ok: true, preview };
+}
+ipcMain.handle('transfer:importText', async (_e, text) => startTransferImport(text));
+ipcMain.handle('transfer:importFile', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import',
+    properties: ['openFile'],
+    filters: [{ name: 'Export files', extensions: ['json', 'txt'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (canceled || !filePaths || !filePaths[0]) return { ok: false, canceled: true };
+  let text;
+  try {
+    if (fs.statSync(filePaths[0]).size > 12 * 1024 * 1024) return { ok: false, error: 'That file is far too big to be an export from this app.' };
+    text = fs.readFileSync(filePaths[0], 'utf8');
+  } catch (err) {
+    return { ok: false, error: `Couldn't read that file: ${err.message}` };
+  }
+  return startTransferImport(text);
+});
+ipcMain.handle('transfer:importCancel', async () => { pendingImport = null; return true; });
+
+// a copy of everything an import is about to change, so it can be undone
+const importBackupDir = () => path.join(userDataDir(), 'import-backup');
+function backupForImport(ids) {
+  const dir = importBackupDir();
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const manifest = {};
+  for (const id of ids) {
+    const file = TRANSFER_FILES[id]();
+    const existed = fs.existsSync(file);
+    manifest[id] = existed;
+    if (existed) fs.copyFileSync(file, path.join(dir, id + '.json'));
+  }
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
+}
+function restoreImportBackup() {
+  const dir = importBackupDir();
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  for (const [id, existed] of Object.entries(manifest)) {
+    if (!TRANSFER_FILES[id]) continue;
+    const file = TRANSFER_FILES[id]();
+    if (existed) fs.copyFileSync(path.join(dir, id + '.json'), file); else fs.rmSync(file, { force: true });
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+const syncOverlay = () => {
+  const o = loadSettings().overlay;
+  if (o && mainWindow && process.platform === 'win32' && mainWindow.setTitleBarOverlay) { try { mainWindow.setTitleBarOverlay({ ...o, height: 36 }); } catch { /* applied at the next start */ } }
+};
+
+ipcMain.handle('transfer:importApply', async (_e, opts) => {
+  if (!pendingImport || Date.now() - pendingImport.at > PENDING_MS) { pendingImport = null; return { ok: false, error: 'That import is no longer open. Choose the file or text again.' }; }
+  const { plan } = pendingImport;
+  const mode = opts && opts.mode === 'replace' ? 'replace' : 'merge';
+  const chosen = pickSections(opts && opts.sections).filter(id => plan.sections[id] && plan.sections[id].available); // only what is really in the file
+  if (!chosen.length) return { ok: false, error: 'Tick at least one thing to import.' };
+  const touched = [...new Set(chosen.flatMap(id => FILES_OF[id]))];
+  const done = [];
+  try {
+    backupForImport(touched);
+    for (const id of chosen) {
+      const p = plan.sections[id];
+      if (id === 'settings') {
+        fs.writeFileSync(settingsPath(), JSON.stringify({ ...loadSettings(), ...p.apply }));
+        done.push({ id, label: 'Settings', added: p.count, skipped: p.skipped.map(s => ({ label: s.label, reason: s.reason })), unknown: p.unknown });
+      } else if (id === 'following') {
+        const f = transfer.combine('following', readList(TRANSFER_FILES.following()), p.items, mode);
+        const n = transfer.combine('followNotifications', readList(TRANSFER_FILES.followNotifications()), p.noticeItems, mode);
+        fs.writeFileSync(TRANSFER_FILES.following(), JSON.stringify(f.list));
+        fs.writeFileSync(TRANSFER_FILES.followNotifications(), JSON.stringify(n.list));
+        done.push({ id, label: 'Followed levels', added: f.added, kept: f.kept, notices: n.added });
+      } else {
+        const kind = id; // favourites | personal | notifications
+        const r = transfer.combine(kind, readList(TRANSFER_FILES[id]()), p.items, mode);
+        fs.writeFileSync(TRANSFER_FILES[id](), JSON.stringify(r.list));
+        done.push({ id, label: transfer.SECTIONS.find(s => s.id === id).label, added: r.added, kept: r.kept });
+      }
+    }
+  } catch (err) {
+    try { restoreImportBackup(); } catch { /* nothing more to do */ }
+    return { ok: false, error: `The import couldn't be finished, so nothing was changed (${err.message}).` };
+  }
+  if (chosen.includes('settings')) syncOverlay();
+  pendingImport = null;
+  return { ok: true, mode, done, fromPlatform: plan.fromPlatform, fromVersion: plan.fromVersion, newerFormat: plan.newerFormat };
+});
+ipcMain.handle('transfer:undo', async () => {
+  try {
+    restoreImportBackup();
+    syncOverlay();
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'There is nothing to undo.' };
+  }
+});
+
 ipcMain.handle('settings:get', async () => loadSettings());
 ipcMain.handle('settings:set', async (_e, patch) => saveSettings(patch && typeof patch === 'object' ? patch : {}));
 
@@ -778,7 +964,15 @@ ipcMain.handle('auth:clear', async () => {
 // can't update themselves, so they skip all of this.
 // ---------------------------------------------------------------------------
 let autoUpdater = null;
+// Mac: electron-updater can't be used (it needs a paid Apple certificate), so mac-updater.js does the same job
+let macUpdater = null;
+function setupMacUpdates() {
+  const pub = (require('./package.json').build || {}).publish || {};
+  macUpdater = require('./mac-updater').createMacUpdater({ app, dialog, shell, getWindow: () => mainWindow, owner: pub.owner, repo: pub.repo });
+  return macUpdater.start();
+}
 function setupAutoUpdate() {
+  if (process.platform === 'darwin') return setupMacUpdates();
   if (!app.isPackaged || process.env.PORTABLE_EXECUTABLE_FILE) return false;
   try { ({ autoUpdater } = require('electron-updater')); } catch (err) { console.warn('Auto-update unavailable:', err && err.message); return false; }
   autoUpdater.autoDownload = true;
@@ -806,6 +1000,7 @@ function setupAutoUpdate() {
 }
 ipcMain.handle('app:version', () => app.getVersion());
 ipcMain.handle('update:check', async () => {
+  if (process.platform === 'darwin') return macUpdater && app.isPackaged ? macUpdater.check(true) : { status: 'dev' };
   if (!autoUpdater) return { status: process.env.PORTABLE_EXECUTABLE_FILE ? 'portable' : 'dev' };
   try {
     const r = await autoUpdater.checkForUpdates();
@@ -816,10 +1011,13 @@ ipcMain.handle('update:check', async () => {
 });
 
 app.whenReady().then(async () => {
-  Menu.setApplicationMenu(null);
+  // Windows / Linux: no menu bar. A Mac always has one at the top of the screen, and without it copy / paste / quit shortcuts don't work.
+  Menu.setApplicationMenu(process.platform === 'darwin'
+    ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+    : null);
   await startLocalServer();
   createWindow();
-  createTray();
+  if (process.platform !== 'darwin') createTray(); // on a Mac the Dock icon does that job: closing the window keeps the app running, clicking the Dock icon brings it back
   setupAutoUpdate();
   if (loadApiKey()) startPolling();
 
@@ -845,4 +1043,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   app.isQuiting = true;
   stopPolling();
+  if (macUpdater) macUpdater.onQuit(); // an update you chose "Later" for goes in as the app quits
 });

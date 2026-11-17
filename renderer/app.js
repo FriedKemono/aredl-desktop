@@ -13,7 +13,10 @@ window.addEventListener('error', (e) => {
 });
 
 const $ = (sel) => document.querySelector(sel);
-if (window.aredl.platform === 'win32') document.body.classList.add('custom-titlebar');
+// Windows and Mac both let the page draw the title bar, so the top bar of tabs can live right in it (the real window
+// buttons stay: Windows' on the right, the Mac's red / yellow / green ones on the left).
+if (window.aredl.platform === 'win32') document.body.classList.add('custom-titlebar', 'top-bar-capable');
+else if (window.aredl.platform === 'darwin') document.body.classList.add('custom-titlebar', 'top-bar-capable', 'mac-titlebar');
 // F11 fullscreen: main.js tells us when it changes so the title bar can drop its drag area
 window.aredl.onFullscreenChange((on) => {
   document.body.classList.toggle('fullscreen', on);
@@ -104,6 +107,7 @@ function showTab(name) {
   if (name !== 'list') abortRecords(); // stop fetching records for a level you're no longer looking at
   else renderRecordsFooter();
   document.body.dataset.tab = name;
+  if (name === 'settings' && window.refreshTransferChoices) window.refreshTransferChoices();
   pauseAllVideos(); // whatever was playing on the tab we're leaving is no longer visible
   try { [...docks].forEach(d => d.layout()); } catch { /* players not set up yet */ } // hide / move players now, not a frame later
   if (name === 'changelog' && !state.changelogLoaded) loadChangelog(true);
@@ -530,7 +534,7 @@ function saveNavLayout() {
 }
 
 function applyNavPlacement() {
-  const top = !!appSettings.navTop && document.body.classList.contains('custom-titlebar');
+  const top = !!appSettings.navTop && document.body.classList.contains('top-bar-capable');
   document.body.classList.toggle('nav-top', top);
   $('#navTopOptions').hidden = !top;
   if (!top) setNavEditing(false);
@@ -580,6 +584,7 @@ $('#updateCheckBtn').addEventListener('click', async () => {
       'up-to-date': "You're on the latest version.",
       portable: "The portable version can't update itself. Install the Setup version to get automatic updates.",
       dev: "Updates only work in the installed app, not when running from source.",
+      manual: `Version ${r.version} is available, but this copy can't update itself where it is. Move AREDL Desktop into your Applications folder, or download it from the releases page.`,
       error: `Couldn't check for updates (${r.message || 'unknown error'}).`,
     }[r.status] || 'Done.';
   } catch { out.textContent = "Couldn't check for updates."; }
@@ -877,6 +882,201 @@ window.addEventListener('blur', () => navDragEnd(false));
   });
 })();
 
+// ---- Export / import: settings and the lists you keep (the checking happens in the main process: settings-transfer.js) ----
+(function transferUi() {
+  const REPORT_KEY = 'aredl-import-report';
+  const resultLine = $('#transferResultLine'), result = $('#transferResult');
+  const pasteLine = $('#importPasteLine'), pasteBox = $('#importPasteBox');
+  const previewLine = $('#importPreviewLine'), preview = $('#importPreview');
+  const checksBox = $('#exportChecks');
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  const plural = (n, noun) => `${n} ${noun[n === 1 ? 0 : 1]}`;
+  const countText = (c, sec) => (c ? plural(c, sec.noun) : 'none yet');
+
+  function show(kind, title, details = [], extra) { // kind: ok | error
+    result.replaceChildren();
+    result.className = `transfer-result ${kind}`;
+    result.appendChild(el('strong', null, title));
+    details.forEach(d => result.appendChild(el('div', 'transfer-detail', d)));
+    if (extra) result.appendChild(extra);
+    resultLine.hidden = false;
+  }
+  const hidePreview = () => { previewLine.hidden = true; preview.replaceChildren(); };
+  // A tick-box row: bold name, how many, and a line about it
+  function checkRow(id, sec, text, { checked, disabled, name = 'part' } = {}) {
+    const row = el('label', 'checkbox-wrap transfer-check' + (disabled ? ' off' : ''));
+    const box = el('input'); box.type = 'checkbox'; box.value = id; box.checked = !!checked && !disabled; box.disabled = !!disabled; box.name = name;
+    const body = el('span', 'transfer-check-text');
+    body.appendChild(el('b', null, sec.label));
+    body.appendChild(el('span', 'transfer-count', ` – ${text}`));
+    if (sec.about) body.appendChild(el('small', null, sec.about));
+    row.append(box, body);
+    return row;
+  }
+
+  // ---- export: what is there to take, and what is ticked ----
+  let exportSections = [];
+  async function loadChoices() {
+    let info;
+    try { info = await window.aredl.transferInfo(); } catch { return; }
+    const ticked = new Set([...checksBox.querySelectorAll('input:checked')].map(i => i.value));
+    const first = !checksBox.children.length;
+    exportSections = info;
+    checksBox.replaceChildren(...info.map(sec => {
+      const extra = sec.extra ? ` and ${plural(sec.extra, ['update notice', 'update notices'])}` : '';
+      return checkRow(sec.id, sec, `${countText(sec.count, sec)}${sec.count ? extra : ''}`, { checked: first ? sec.id === 'settings' : ticked.has(sec.id), disabled: !sec.count });
+    }));
+  }
+  window.refreshTransferChoices = loadChoices; // called whenever Settings is opened, so the numbers are current
+  const chosenForExport = () => [...checksBox.querySelectorAll('input:checked')].map(i => i.value);
+  const describeIncluded = (list) => list.map(s => `${s.label} (${s.count})`).join(', ');
+  const busy = (btn, on) => { btn.disabled = on; };
+
+  $('#exportFileBtn').addEventListener('click', async (e) => {
+    flushSoftSettings(); const btn = e.currentTarget; busy(btn, true);
+    try {
+      const sections = chosenForExport();
+      if (!sections.length) { show('error', 'Tick at least one thing to include.'); return; }
+      const res = await window.aredl.exportTransferFile(sections);
+      if (res.canceled) return;
+      if (res.ok) show('ok', 'Saved to a file.', [`Included: ${describeIncluded(res.included)}`, res.path]); else show('error', res.error || 'The export failed.');
+    } catch (err) { show('error', `The export failed: ${err.message}`); } finally { busy(btn, false); }
+  });
+  $('#exportTextBtn').addEventListener('click', async (e) => {
+    flushSoftSettings(); const btn = e.currentTarget; busy(btn, true);
+    try {
+      const sections = chosenForExport();
+      if (!sections.length) { show('error', 'Tick at least one thing to include.'); return; }
+      const res = await window.aredl.exportTransferText(sections);
+      if (!res.ok) { show('error', res.error || 'The export failed.'); return; }
+      let copied = true;
+      try { await navigator.clipboard.writeText(res.text); } catch { copied = false; }
+      const text = el('textarea', 'transfer-text');
+      text.readOnly = true; text.rows = 3; text.value = res.text; text.spellcheck = false;
+      text.addEventListener('focus', () => text.select());
+      const notes = [`Included: ${describeIncluded(res.included)}`, 'On the other computer: Settings → Export & import → Paste text… and paste it in.'];
+      if (res.long) notes.push('That is a long piece of text – for this much, saving to a file is more reliable.');
+      show('ok', copied ? 'Copied as text.' : 'Here it is as text (copying didn’t work – select it below).', notes, text);
+    } catch (err) { show('error', `The export failed: ${err.message}`); } finally { busy(btn, false); }
+  });
+
+  // ---- import: look inside, pick, apply ----
+  function showPreview(p) {
+    preview.replaceChildren();
+    const from = [p.fromPlatform, p.fromVersion && `app ${p.fromVersion}`].filter(Boolean).join(', ');
+    preview.appendChild(el('strong', null, from ? `Found in this file (exported from ${from}):` : 'Found in this file:'));
+    const list = el('div', 'transfer-checks');
+    const lists = p.sections.filter(s => s.id !== 'settings' && s.available);
+    p.sections.forEach(sec => {
+      if (!sec.available) { // settings that are all of a kind this computer doesn't have
+        const row = el('div', 'transfer-detail');
+        row.textContent = `${sec.label}: nothing here can be used on this computer – ${sec.skipped.map(s => `${s.label} (${s.reason})`).join('; ')}.`;
+        list.appendChild(row);
+        return;
+      }
+      const extra = sec.notices ? ` and ${plural(sec.notices, ['update notice', 'update notices'])}` : '';
+      const row = checkRow(sec.id, { ...sec, about: sec.about }, `${plural(sec.count, sec.noun)}${extra}`, { checked: true, name: 'importPart' });
+      if (sec.skipped.length) {
+        const body = row.querySelector('.transfer-check-text');
+        body.appendChild(el('small', 'transfer-skip', `${plural(sec.skipped.length, ['setting', 'settings'])} can’t be used on this computer and will be skipped: ${sec.skipped.map(s => `${s.label} (${s.reason})`).join('; ')}.`));
+      }
+      list.appendChild(row);
+    });
+    preview.appendChild(list);
+    if (p.newerFormat) preview.appendChild(el('div', 'transfer-detail', 'This export was made by a newer version of the app; everything this version understands can be imported.'));
+    if (lists.length) {
+      const mode = el('div', 'transfer-mode');
+      mode.appendChild(el('strong', null, 'For the lists:'));
+      [['merge', 'Add to what I have', 'keeps everything you have now and adds what is new'], ['replace', 'Replace what I have', 'swaps your current lists for the imported ones']].forEach(([val, name, hint], i) => {
+        const lab = el('label', 'checkbox-wrap transfer-check');
+        const radio = el('input'); radio.type = 'radio'; radio.name = 'importMode'; radio.value = val; radio.checked = i === 0;
+        const t = el('span', 'transfer-check-text'); t.appendChild(el('b', null, name)); t.appendChild(el('small', null, hint));
+        lab.append(radio, t);
+        mode.appendChild(lab);
+      });
+      preview.appendChild(mode);
+    }
+    const buttons = el('div', 'transfer-btns');
+    const go = el('button', 'btn small-btn', 'Import selected');
+    const cancel = el('button', 'btn btn-ghost small-btn', 'Cancel');
+    buttons.append(go, cancel);
+    preview.appendChild(buttons);
+    const sync = () => { go.disabled = !preview.querySelector('input[name="importPart"]:checked'); };
+    preview.addEventListener('change', sync); sync();
+    cancel.addEventListener('click', () => { hidePreview(); window.aredl.cancelTransferImport().catch(() => {}); });
+    go.addEventListener('click', async () => {
+      const sections = [...preview.querySelectorAll('input[name="importPart"]:checked')].map(i => i.value);
+      const modeEl = preview.querySelector('input[name="importMode"]:checked');
+      go.disabled = true; cancel.disabled = true;
+      flushSoftSettings();
+      let res;
+      try { res = await window.aredl.applyTransferImport({ sections, mode: modeEl ? modeEl.value : 'merge' }); } catch (err) { res = { ok: false, error: err.message }; }
+      if (!res.ok) { hidePreview(); show('error', res.error || 'The import failed.'); return; }
+      try { sessionStorage.setItem(REPORT_KEY, JSON.stringify(res)); } catch { /* the page still reloads, just without the summary */ }
+      reloadToApply();
+    });
+    previewLine.hidden = false;
+    previewLine.scrollIntoView({ block: 'nearest' });
+  }
+  // the page is reloaded so everything is applied exactly as it is at start-up; edits still waiting to be saved are dropped first
+  function reloadToApply() {
+    softPatch = null; clearTimeout(softTimer); softTimer = null;
+    location.reload();
+  }
+  async function afterLookup(res) {
+    if (res.canceled) return;
+    resultLine.hidden = true;
+    if (!res.ok) { hidePreview(); show('error', res.error || 'That could not be imported.'); return; }
+    pasteLine.hidden = true;
+    showPreview(res.preview);
+  }
+  $('#importFileBtn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; busy(btn, true);
+    try { await afterLookup(await window.aredl.importTransferFile()); }
+    catch (err) { show('error', `The import failed: ${err.message}`); } finally { busy(btn, false); }
+  });
+  $('#importTextBtn').addEventListener('click', () => { pasteLine.hidden = !pasteLine.hidden; if (!pasteLine.hidden) pasteBox.focus(); });
+  $('#importPasteCancel').addEventListener('click', () => { pasteLine.hidden = true; pasteBox.value = ''; });
+  $('#importPasteGo').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; busy(btn, true);
+    try { await afterLookup(await window.aredl.importTransferText(pasteBox.value)); }
+    catch (err) { show('error', `The import failed: ${err.message}`); } finally { busy(btn, false); }
+  });
+
+  // ---- what an import did (shown after the reload that applies it) ----
+  function showReport(rep) {
+    const lines = [];
+    if (rep.fromPlatform || rep.fromVersion) lines.push(`Exported from ${[rep.fromPlatform, rep.fromVersion && `app ${rep.fromVersion}`].filter(Boolean).join(', ')}.`);
+    rep.done.forEach(d => {
+      if (d.id === 'settings') {
+        lines.push(`Settings: ${plural(d.added, ['setting', 'settings'])} applied.`);
+        if (d.skipped.length) lines.push(`Skipped ${plural(d.skipped.length, ['setting', 'settings'])}:`, ...d.skipped.map(s => `• ${s.label} – ${s.reason}`));
+        if (d.unknown) lines.push(`${plural(d.unknown, ['setting', 'settings'])} from a different version of the app ${d.unknown === 1 ? 'was' : 'were'} ignored.`);
+      } else if (rep.mode === 'replace') {
+        lines.push(`${d.label}: replaced with ${d.added}${d.id === 'following' && d.notices != null ? ` (and ${plural(d.notices, ['update notice', 'update notices'])})` : ''}.`);
+      } else {
+        lines.push(`${d.label}: ${d.added} added${d.kept ? `, ${d.kept} already there` : ''}${d.id === 'following' && d.notices ? `, ${plural(d.notices, ['update notice', 'update notices'])} added` : ''}.`);
+      }
+    });
+    const undo = el('button', 'btn btn-ghost small-btn', 'Undo this import');
+    undo.addEventListener('click', async () => {
+      undo.disabled = true;
+      const res = await window.aredl.undoTransferImport().catch(() => ({ ok: false, error: 'Could not undo.' }));
+      if (res.ok) reloadToApply(); else { undo.disabled = false; show('error', res.error || 'Could not undo.'); }
+    });
+    show('ok', 'Import finished.', lines, undo);
+  }
+  try {
+    const saved = sessionStorage.getItem(REPORT_KEY);
+    if (saved) {
+      sessionStorage.removeItem(REPORT_KEY);
+      const rep = JSON.parse(saved);
+      setTimeout(() => { showTab('settings'); showReport(rep); resultLine.scrollIntoView({ block: 'center' }); }, 700);
+    }
+  } catch { /* no summary - everything is applied anyway */ }
+  setTimeout(loadChoices, 1200);
+})();
+
 $('#videoLeaveSelect').addEventListener('change', () => setSetting('videoOnLeave', $('#videoLeaveSelect').value));
 $('#favSortBy').addEventListener('change', () => { setSetting('favSort', $('#favSortBy').value); renderFavourites(); });
 
@@ -1043,9 +1243,9 @@ async function initSettings() {
   $('#dateDpSlider').value = dpNow;
   $('#dateDpOut').textContent = `${dpNow} dp`;
   $('#favSortBy').value = appSettings.favSort || 'category';
-  $('#navNoTitlebar').hidden = document.body.classList.contains('custom-titlebar');
+  $('#navNoTitlebar').hidden = document.body.classList.contains('top-bar-capable');
   applyTheme(appSettings.theme || 'default');
-  if (document.body.classList.contains('custom-titlebar')) {
+  if (document.body.classList.contains('top-bar-capable')) {
     $('#navTopWrap').hidden = false;
     $('#navTopToggle').checked = !!appSettings.navTop;
     $('#navMenuToggle').checked = !!appSettings.navMenu;

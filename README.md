@@ -131,6 +131,50 @@ To release an update:
 
 No GitHub Actions? From your own PC, set a token first (`set GH_TOKEN=your_token`) and run `npm run release`.
 
+## Export / import
+
+Settings -> **Export & import** takes your data from one computer to another, Windows or Mac, in either direction.
+Export: tick what to include - **settings**, **favourites**, **followed levels** (and their update notices), the **personal
+list**, **cleared notifications** - and save it to a `.json` file or copy it as one line of text (`AREDL-SETTINGS:...`).
+Import: choose the file (or paste the text) and the app shows what is inside; only the parts that really are in it can be
+ticked. The lists can be **added** to what you have (nothing is lost; an entry already there is left alone) or **replace**
+it. The result is listed afterwards, with **Undo this import**, which puts everything it changed back (a copy is kept in
+`import-backup/` in the app's data folder).
+
+The rules live in `settings-transfer.js` and are strict: every setting is checked against a list of the real ones (right
+kind of value, inside its range), every list entry is cleaned and size-limited, and anything that doesn't pass is skipped
+and counted. A setting that doesn't exist on the computer you import into (the Windows window-button colours on a Mac, the
+top bar on Linux) is skipped with a reason. **The account / API key is never part of an export.**
+
+## Mac version
+
+A Mac app is built too. On a Mac, `npm install` then `npm run dist` builds it (`npm run dist` builds for whichever
+computer you run it on), and GitHub Actions builds it automatically as well - see `.github/workflows/build.yml`.
+A Mac can only be built on a Mac, so on Windows leave that to GitHub: pushing a version tag adds the Mac files to the
+release next to the Windows ones:
+
+* `AREDL-Desktop-mac-arm64.dmg` / `AREDL-Desktop-mac-x64.dmg` - the installers (Apple Silicon: M1 and newer / Intel).
+* `AREDL-Desktop-mac-arm64.zip` / `AREDL-Desktop-mac-x64.zip` - what installed Mac apps download to update themselves.
+
+**Updates on Mac.** `electron-updater` can't be used there: Apple only lets an app update itself that way if it is signed
+with a paid developer certificate. So `mac-updater.js` does the same job: it asks GitHub for the newest release, downloads
+the matching `.zip` in the background (progress shows on the Dock icon), asks "Restart now / Later", and swaps the new app
+in when the app quits. It checks 8 seconds after start-up and every 4 hours (and Settings -> About -> Check for updates).
+The Windows release goes up first and the Mac files a few minutes later; until they exist the Mac app just sees
+"nothing new" and looks again later. If a copy can't replace itself (it is running straight from the disk image, or from
+a folder it can't write to) it offers the download page instead - the fix is to drag it into Applications.
+
+**Not signed by Apple.** That needs a paid developer account. Instead `scripts/adhoc-sign.js` gives the app a free
+"ad-hoc" signature so it runs on Apple Silicon. The first time a *downloaded* copy is opened, macOS will say it can't
+verify the app: right-click the app -> **Open** -> **Open**. On newer macOS versions (Sequoia) that button is gone;
+instead open **System Settings -> Privacy & Security**, scroll down, and press **Open Anyway**. Or, once, in Terminal:
+`xattr -cr "/Applications/AREDL Desktop.app"`. A copy built on your own Mac opens without that, and so does an update the
+app downloads itself.
+
+On a Mac the window works like the Windows one: the page draws its own title bar (with the Mac's red / yellow / green buttons
+at its left end), so the **Top bar** setting puts the tabs in that bar. There is no tray icon (the Dock icon does that
+job: closing the window keeps it running and notifications keep coming), and there is a normal menu bar.
+
 ## App tour
 
 The first time the app opens (and once for anyone updating from a version without it) a guided tour walks

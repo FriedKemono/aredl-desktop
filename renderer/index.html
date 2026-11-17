@@ -569,6 +569,45 @@
         </div>
       </div>
 
+      <h3 class="settings-section">Backup</h3>
+      <div class="settings-card wide">
+        <h3>Export &amp; import</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Export</strong><small>Pick what to take with you, then save it to a file or copy it as text. It works between Windows and Mac. Your account and API key are never included.</small></div>
+            <div class="transfer-export">
+              <div class="transfer-checks" id="exportChecks"></div>
+              <div class="transfer-btns">
+                <button class="btn btn-ghost small-btn" id="exportFileBtn">Save to file…</button>
+                <button class="btn btn-ghost small-btn" id="exportTextBtn">Copy as text</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Import</strong><small>Load an export made by this app on any computer. You’ll see what is inside it and choose which parts to bring in. Settings that don’t exist on this computer are skipped and listed, and you can undo an import.</small></div>
+            <div class="transfer-btns">
+              <button class="btn btn-ghost small-btn" id="importFileBtn">Open file…</button>
+              <button class="btn btn-ghost small-btn" id="importTextBtn">Paste text…</button>
+            </div>
+          </div>
+          <div class="setting-line" id="importPasteLine" hidden>
+            <div class="transfer-paste">
+              <textarea id="importPasteBox" rows="4" placeholder="Paste the exported text here" spellcheck="false" autocomplete="off" aria-label="Exported text to import"></textarea>
+              <div class="transfer-btns">
+                <button class="btn small-btn" id="importPasteGo">Look inside</button>
+                <button class="btn btn-ghost small-btn" id="importPasteCancel">Cancel</button>
+              </div>
+            </div>
+          </div>
+          <div class="setting-line" id="importPreviewLine" hidden>
+            <div class="transfer-preview" id="importPreview"></div>
+          </div>
+          <div class="setting-line" id="transferResultLine" hidden>
+            <div class="transfer-result" id="transferResult" role="status" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+
       <h3 class="settings-section">Advanced</h3>
       <div class="settings-card">
         <h3>Developer</h3>

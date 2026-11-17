@@ -2322,3 +2322,54 @@ body.tools-anim:not(.tools-collapsed) .tools-items{animation:toolsIn .24s ease;}
 .fav-pill.stat small{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim);}
 .fav-pill.stat.pts{background:var(--accent-soft);border-color:var(--accent-soft2);}
 .fav-pill.stat.pts b{color:var(--accent);}
+
+
+/* ---- Mac: the page draws the title bar (so the top bar of tabs can sit in it, like on Windows) and the Mac's own
+   window buttons (red / yellow / green) float over its left end - so the bar starts a little further in ---- */
+body.mac-titlebar .titlebar-inner{width:100%;padding-left:86px;}
+body.mac-titlebar .titlebar-icon{display:none;}
+body.mac-titlebar.fullscreen .titlebar-inner{padding-left:14px;} /* the window buttons are hidden in full screen */
+
+
+/* ---- Export & import ---- */
+.setting-line[hidden]{display:none !important;}
+.transfer-btns{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.transfer-export{display:flex;flex-direction:column;gap:12px;align-items:flex-start;min-width:0;}
+.transfer-checks{display:flex;flex-direction:column;gap:8px;min-width:0;}
+.transfer-check{display:flex;align-items:flex-start;gap:10px;cursor:pointer;}
+.transfer-check.off{opacity:.5;cursor:default;}
+.transfer-check input{margin-top:3px;flex:none;}
+.transfer-check-text{display:flex;flex-direction:column;gap:2px;min-width:0;font-size:13px;}
+.transfer-check-text b{font-weight:700;color:var(--text);}
+.transfer-count{display:inline;color:var(--text-dim);font-weight:500;}
+.transfer-check-text small{font-size:11.5px;line-height:1.4;color:var(--text-dim);}
+.transfer-check-text small.transfer-skip{color:var(--text-dim);font-style:italic;}
+.transfer-paste{grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;width:100%;}
+.transfer-preview{grid-column:1 / -1;width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;padding:14px 16px;border-radius:12px;border:1px solid var(--border);background:var(--panel);font-size:13px;}
+.transfer-mode{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--border);}
+#importPasteBox,.transfer-text{
+  width:100%;box-sizing:border-box;resize:vertical;padding:10px 12px;border-radius:12px;
+  background:var(--panel);border:1px solid var(--border);color:var(--text);
+  font-family:var(--mono, ui-monospace, monospace);font-size:12px;line-height:1.45;outline:none;
+}
+#importPasteBox:focus,.transfer-text:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);}
+.transfer-result{grid-column:1 / -1;width:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:12px;border:1px solid var(--border);background:var(--panel);font-size:13px;}
+.transfer-result.ok{border-color:var(--accent-soft2);}
+.transfer-result.error{border-color:#7f1d1d;background:rgba(127,29,29,.18);}
+.transfer-result strong{font-weight:700;}
+.transfer-detail{color:var(--text-dim);font-size:12.5px;line-height:1.45;overflow-wrap:anywhere;}
+.transfer-result .btn{align-self:flex-start;margin-top:4px;}
+
+/* the tick rows in Export & import use the app's own chip look (a dot that fills when ticked), just roomier */
+#tab-settings label.transfer-check{
+  display:flex;align-items:flex-start;gap:12px;width:100%;height:auto;min-height:0;box-sizing:border-box;padding:10px 14px;border-radius:14px;
+  border:1px solid var(--border);background:var(--glass);color:var(--text-dim);cursor:pointer;
+}
+#tab-settings label.transfer-check > input{display:none;}
+#tab-settings label.transfer-check::before{content:'';width:9px;height:9px;margin-top:5px;border-radius:50%;border:1.5px solid currentColor;flex:none;}
+#tab-settings label.transfer-check:hover{border-color:var(--accent-soft2);}
+#tab-settings label.transfer-check:has(> input:checked){background:var(--accent-soft);border-color:var(--accent);color:var(--accent);}
+#tab-settings label.transfer-check:has(> input:checked)::before{background:currentColor;}
+#tab-settings label.transfer-check:has(> input:checked) .transfer-check-text b{color:var(--accent);}
+#tab-settings label.transfer-check:has(> input:disabled){opacity:.45;cursor:not-allowed;}
+.transfer-export .transfer-checks{width:min(440px,100%);}
