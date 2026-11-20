@@ -1,7 +1,8 @@
 // ---------------------------------------------------------------------------
 // Sync between computers through a shared folder (OneDrive, iCloud Drive, Dropbox, a network drive...).
 //
-// Each computer keeps its own copy of the app's data. The sync folder holds ONE file, AREDL-Desktop-sync.json, with one
+// Each computer keeps its own copy of the app's data. The sync folder holds one file per AREDL API key (the file name
+// comes from the app, see main.js), with one
 // block per kind of data (settings, favourites, custom lists, saved filters, followed levels, personal list, cleared
 // notifications). A sync compares, for every block you have switched on:
 //   * what is on this computer,
@@ -81,10 +82,12 @@ function mergeBlocks(id, a, b) {
   return transfer.combine(id, a, b, 'merge').list;
 }
 
-function createSync({ userDataDir, io, now = () => Date.now(), log = console }) {
+const NEEDS_KEY = 'Sign in with your AREDL API key first. Each API key has its own save file in the folder.';
+
+function createSync({ userDataDir, io, now = () => Date.now(), log = console, fileName = () => SYNC_FILE }) {
   const statePath = () => path.join(userDataDir(), 'sync-state.json');
   const backupDir = () => path.join(userDataDir(), 'sync-backups');
-  const defaults = () => ({ folder: null, enabled: false, parts: ['settings', 'favourites', 'lists', 'filters', 'following', 'personal'], hashes: {}, lastSyncAt: null, lastSummary: null, device: os.hostname().slice(0, 40) });
+  const defaults = () => ({ folder: null, enabled: false, parts: ['settings', 'favourites', 'lists', 'filters', 'following', 'personal'], hashes: {}, lastSyncAt: null, lastSummary: null });
   let state = null;
   function load() {
     if (state) return state;
@@ -95,7 +98,7 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console }) 
     return state;
   }
   function save() { try { fs.writeFileSync(statePath(), JSON.stringify(state)); } catch (err) { log.warn && log.warn('sync state not saved:', err.message); } }
-  const file = () => path.join(load().folder, SYNC_FILE);
+  const file = () => path.join(load().folder, fileName());
 
   function readRemote() {
     const f = file();
@@ -130,9 +133,10 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console }) 
   // the app quits); anything that needs bringing here is reported as "waiting" for you to sync on purpose.
   function syncNow(mode = 'full') {
     const st = load();
-    if (!st.folder) return { ok: false, error: 'Choose a sync folder first.' };
-    if (!fs.existsSync(st.folder)) return { ok: false, error: `The sync folder can't be found (${st.folder}). Is the drive connected / is OneDrive running?` };
-    const result = { ok: true, mode, pushed: [], pulled: [], merged: [], waiting: [], conflicts: [], unchanged: 0, at: new Date(now()).toISOString() };
+    if (!st.folder) return { ok: false, error: 'Connect a Google Drive folder first.' };
+    if (!fileName()) return { ok: false, error: NEEDS_KEY };
+    if (!fs.existsSync(st.folder)) return { ok: false, error: `The sync folder can't be found (${st.folder}). Is the drive connected / is Google Drive connected?` };
+    const result = { ok: true, mode, pushed: [], pulled: [], merged: [], waiting: [], conflicts: [], missing: [], unchanged: 0, at: new Date(now()).toISOString() };
     let remote;
     try { remote = readRemote(); } catch (err) { return { ok: false, error: err.message }; }
     const doc = remote.doc;
@@ -146,20 +150,20 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console }) 
       if (mode === 'save') {
         const old = rs ? cleanRemote(id, rs.data) : null;
         if (old && !isEmpty(id, old) && hash(old) !== lh) backup(id, 'replaced-remote', old);
-        doc.sections[id] = { updatedAt: new Date(now()).toISOString(), by: st.device, data: local };
+        doc.sections[id] = { updatedAt: new Date(now()).toISOString(), data: local };
         st.hashes[id] = lh; writeNeeded = true; result.pushed.push(id); continue;
       }
       // 'load': what the folder holds replaces this computer's data (this computer's copy is kept in sync-backups first)
       if (mode === 'load') {
         const rem = rs ? cleanRemote(id, rs.data) : null;
-        if (!rem) { result.unchanged++; continue; }
+        if (!rem) { result.missing.push(id); continue; }
         if (hash(rem) === lh) { st.hashes[id] = lh; result.unchanged++; continue; }
         backup(id, 'replaced-local', local);
         io.apply(id, rem); st.hashes[id] = hash(payloadOf(id, io.source())); result.pulled.push(id); continue;
       }
       const rem = rs ? cleanRemote(id, rs.data) : null, rh = rem ? hash(rem) : null;
       const last = st.hashes[id] || null;
-      const push = () => { doc.sections[id] = { updatedAt: new Date(now()).toISOString(), by: st.device, data: local }; st.hashes[id] = lh; writeNeeded = true; result.pushed.push(id); };
+      const push = () => { doc.sections[id] = { updatedAt: new Date(now()).toISOString(), data: local }; st.hashes[id] = lh; writeNeeded = true; result.pushed.push(id); };
       const pull = (data) => { io.apply(id, data); st.hashes[id] = hash(payloadOf(id, io.source())); result.pulled.push(id); };
 
       if (!rem) { if (!isEmpty(id, local)) push(); else result.unchanged++; continue; }
@@ -176,7 +180,7 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console }) 
           backup(id, 'before-merge-local', local); backup(id, 'before-merge-remote', rem);
           io.apply(id, merged);
           const final = payloadOf(id, io.source());
-          doc.sections[id] = { updatedAt: new Date(now()).toISOString(), by: st.device, data: final };
+          doc.sections[id] = { updatedAt: new Date(now()).toISOString(), data: final };
           st.hashes[id] = hash(final); writeNeeded = true; result.merged.push(id);
           continue;
         }
@@ -197,65 +201,16 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console }) 
 
   // ---- settings of the sync itself ----
   function status() {
-    const st = load();
-    let remoteInfo = null;
-    if (st.folder) {
-      try {
-        const r = readRemote();
-        if (!r.exists) remoteInfo = { exists: false };
-        else {
-          const sections = {};
-          for (const id of Object.keys(r.doc.sections)) {
-            if (!SECTION_IDS.includes(id) || !isObj(r.doc.sections[id])) continue;
-            const s = r.doc.sections[id], data = cleanRemote(id, s.data);
-            sections[id] = { by: typeof s.by === 'string' ? s.by.slice(0, 40) : null, updatedAt: s.updatedAt || null, empty: isEmpty(id, data) };
-          }
-          remoteInfo = { exists: true, updated: r.doc.updated || null, parts: Object.keys(sections), sections };
-        }
-      } catch (err) { remoteInfo = { error: err.message }; }
-    }
-    return { folder: st.folder, provider: providerOf(st.folder), enabled: st.enabled, parts: st.parts.slice(), device: st.device, lastSyncAt: st.lastSyncAt, lastSummary: st.lastSummary, remote: remoteInfo, folderOk: !!st.folder && fs.existsSync(st.folder), file: st.folder ? file() : null };
+    const st = load(), name = fileName();
+    return { folder: st.folder, enabled: st.enabled, parts: st.parts.slice(), lastSyncAt: st.lastSyncAt, lastSummary: st.lastSummary, fileName: name, needsKey: !name };
   }
-  // What the first sync would do for each part, worked out WITHOUT changing anything (shown when a folder is chosen).
-  function preview() {
-    const st = load();
-    if (!st.folder || !fs.existsSync(st.folder)) return { ok: false };
-    let remote;
-    try { remote = readRemote(); } catch (err) { return { ok: false, error: err.message }; }
-    const src = io.source(), out = [];
-    for (const id of st.parts) {
-      const local = payloadOf(id, src), rs = isObj(remote.doc.sections[id]) ? remote.doc.sections[id] : null;
-      const rem = rs ? cleanRemote(id, rs.data) : null;
-      const localEmpty = isEmpty(id, local), remEmpty = !rem || isEmpty(id, rem);
-      let action;
-      if (remEmpty && localEmpty) action = 'nothing';
-      else if (remEmpty) action = 'start';          // this computer fills the folder
-      else if (localEmpty) action = 'receive';      // the folder fills this computer
-      else if (hash(local) === hash(rem)) action = 'same';
-      else action = id === 'settings' ? 'newer' : 'merge';
-      out.push({ id, action, by: rs && typeof rs.by === 'string' ? rs.by.slice(0, 40) : null, updatedAt: rs ? rs.updatedAt || null : null });
-    }
-    return { ok: true, device: st.device, fileExists: remote.exists, parts: out };
-  }
-  function setDevice(name) { const st = load(); const n = String(name || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 40); st.device = n || os.hostname().slice(0, 40); save(); return status(); }
   function setFolder(folder) { const st = load(); if (st.folder !== folder) { st.folder = folder; st.hashes = {}; } save(); return status(); }
   function setEnabled(on) { load().enabled = !!on; save(); return status(); }
   function setParts(list) { const st = load(); st.parts = SECTION_IDS.filter(id => Array.isArray(list) && list.includes(id)); save(); return status(); }
-  function reset() { const st = load(); st.hashes = {}; st.lastSummary = null; save(); }
+  function reset() { const st = load(); st.hashes = {}; st.lastSummary = null; st.lastSyncAt = null; save(); }
   function disconnect() { const st = load(); st.folder = null; st.enabled = false; st.hashes = {}; st.lastSummary = null; save(); return status(); }
 
-  return { syncNow, status, preview, reset, setDevice, setFolder, setEnabled, setParts, disconnect, _state: load, _hash: hash, SYNC_FILE };
+  return { syncNow, status, reset, setFolder, setEnabled, setParts, disconnect, _state: load, _hash: hash, SYNC_FILE };
 }
 
-// ---- which cloud-drive folder is this? (by its path) ----
-function providerOf(folder) {
-  const p = String(folder || '');
-  if (!p) return null;
-  if (/google ?drive|GoogleDrive-|[\\/]My Drive\b|[\\/]Shared drives\b/i.test(p)) return 'Google Drive';
-  if (/onedrive/i.test(p)) return 'OneDrive';
-  if (/dropbox/i.test(p)) return 'Dropbox';
-  if (/iclouddrive|CloudDocs|Mobile Documents/i.test(p)) return 'iCloud Drive';
-  return null;
-}
-
-module.exports = { createSync, SyncError, SYNC_FILE, payloadOf, cleanRemote, hash, providerOf };
+module.exports = { createSync, SyncError, SYNC_FILE, NEEDS_KEY, payloadOf, cleanRemote, hash };

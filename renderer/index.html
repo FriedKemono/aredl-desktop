@@ -650,29 +650,22 @@
       <div class="settings-card wide">
         <h3>Sync between computers</h3>
         <div class="setting-lines">
-          <div class="setting-line">
-            <div class="setting-label"><strong>This computer</strong><small>Each computer has a name, so the folder can show which one saved what. Use something recognisable, like “Home PC” or “Laptop”.</small></div>
-            <div class="sync-device">
-              <input type="text" id="syncDevice" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Name of this computer">
-              <button class="btn btn-ghost small-btn" id="syncDeviceSave" type="button" hidden>Save name</button>
-            </div>
-          </div>
           <div class="setting-line" id="syncDriveLine">
-            <div class="setting-label"><strong>Google Drive account</strong><small>Sign in with a Google account, then create a new folder in its Drive or pick one that already exists. An existing folder is checked to make sure it holds an AREDL save before it is used, and you choose whether to use that save or overwrite it. The app only reads and writes its own sync file; it lists folders so one can be chosen.</small></div>
+            <div class="setting-label"><strong>Google Drive folder</strong><small>Sign in with a Google account, then create a new folder in its Drive or choose one that already exists. Each AREDL API key gets its own save file in the folder, so several accounts can share one folder. The app only reads and writes its own save file. The account and API key themselves are never synced.</small></div>
             <div class="transfer-export" id="driveBox"></div>
           </div>
           <div class="setting-line">
-            <div class="setting-label"><strong>Sync now</strong><small>Choose between saving this app’s data to the Google Drive folder, or using the folder’s save to overwrite this app’s data. The previous copy is kept in the sync-backups folder.</small></div>
-            <div class="transfer-btns"><button class="btn small-btn" id="syncNowBtn">Sync now</button></div>
-          </div>
-          <div class="setting-line" id="syncPlanLine" hidden>
-            <div class="sync-plan" id="syncPlan" aria-live="polite"></div>
+            <div class="setting-label"><strong>Sync now</strong><small>Choose between saving this app to the folder or using the folder’s save to overwrite this app. The copy that gets replaced is kept in the sync-backups folder first.</small></div>
+            <div class="transfer-export">
+              <div class="fx-hint" id="syncStatusText" aria-live="polite"></div>
+              <div class="transfer-btns"><button class="btn small-btn" id="syncNowBtn">Sync now</button></div>
+            </div>
           </div>
           <div class="setting-line" id="syncMoreLine" hidden>
             <div class="setting-label"><strong>What to sync</strong><small>Settings that only exist on one system (like Windows’ window button colours) stay where they are.</small></div>
             <div class="transfer-export">
               <div class="transfer-checks" id="syncParts"></div>
-              <label class="checkbox-wrap"><input type="checkbox" id="syncAuto"> Keep in sync automatically</label>
+              <label class="checkbox-wrap"><input type="checkbox" id="syncAuto"> Save changes to the folder automatically</label>
             </div>
           </div>
           <div class="setting-line" id="syncResultLine" hidden>

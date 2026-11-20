@@ -7,14 +7,24 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
+    version: '1.1.21',
+    date: '2026-11-20',
+    title: 'Fixed Bugs',
+    items: [
+      ['fixed', 'Fixed google drive saving bugs for both Mac and PC'],
+    ],
+  },
+  {
     version: '1.1.2',
     date: '2026-11-20',
     title: 'Google Drive sync, refresh options, wider command palette search and a tidier look',
     items: [
-      ['new', 'Google Drive as a sync option (Settings → Sync & songs). Sign in with a Google account in the browser, then create a new folder in its Drive or choose one that already exists. An existing folder is checked to be an AREDL save, and a choice is offered between using that save or overwriting it. A Google OAuth client is built into the app, so no setup is needed in Settings.'],
-      ['new', 'Sync now asks whether to save this app’s data to the Google Drive folder or to use the folder’s save to overwrite this app’s data. The copy that gets replaced is kept in the sync-backups folder.'],
-      ['improved', 'Sync settings only offer Google Drive. The local folder section (OneDrive, Dropbox, iCloud Drive and the Choose another folder button) is removed.'],
-      ['new', 'Each computer has a name, and the sync card spells out what the first sync will do: which computer saves into an empty folder first, what is brought in from a folder that already has data, and what is combined. The file path and the computer that last saved each part are shown.'],
+      ['new', 'Google Drive as a sync option (Settings → Sync & songs). Sign in with a Google account in the browser, then create a new folder in its Drive or choose one that already exists. A Google OAuth client is built into the app, so no setup is needed in Settings.'],
+      ['new', 'Each AREDL API key has its own save file in the Google Drive folder (AREDL-Desktop-, then a short fingerprint of the key), so several accounts can share one folder. The key itself is never written to Drive. Sync is unavailable while signed out of AREDL.'],
+      ['new', 'Sync now asks whether to save this app to the Google Drive folder or to use the folder’s save to overwrite this app. The copy that gets replaced is kept in the sync-backups folder. The sync card shows whether the folder has a save for the current API key and when it was last saved.'],
+      ['improved', 'Sync settings only offer Google Drive. The local folder section (OneDrive, Dropbox, iCloud Drive and the Choose another folder button), the computer names and the first-sync plan are removed.'],
+      ['improved', 'Creating or choosing a Google Drive folder no longer uploads anything: a new folder stays empty until Sync now saves to it. Saving to the folder is checked against Google’s answer, and an upload that does not match is reported as an error. Automatic saving starts after the first Sync now.'],
+      ['fixed', 'Update checks on Mac failed with “undefined/undefined” because the packaged app did not know which GitHub repository to check. The repository is now stored where packaging keeps it. When GitHub has no release marked as the latest one, the list of releases is checked instead, and a clear message is shown when no published release exists. Releases are marked as published and latest automatically after the build.'],
       ['new', 'The command palette key can be changed (Settings → Command palette) and now starts as ` (backtick). A plain key only opens the palette when no text box is focused. Pressing Tab after typing opens the first result.'],
       ['new', 'The command palette now finds any mention of the typed words in settings, submissions, the personal list, notifications, the list changelog, the app changelog, favourites, followed levels, custom list levels and level descriptions.'],
       ['new', 'The Refresh button in the Demon List opens a popup with two separate choices: level info and song info. Level info no longer re-checks songs. The popup stays open until it is closed.'],

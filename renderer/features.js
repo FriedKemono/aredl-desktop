@@ -901,7 +901,7 @@
   }
 
   // ==========================================================================
-  // Sync (settings card)
+  // Sync (settings card): a Google Drive folder, with one save file per AREDL API key
   // ==========================================================================
   const SYNC_REPORT_KEY = 'aredl-sync-report';
   let syncSections = [];
@@ -915,12 +915,15 @@
   function describeSync(res) {
     const names = (ids) => ids.map(partName).join(', ');
     const lines = [];
-    if (res.pushed.length) lines.push(`Sent to the folder: ${names(res.pushed)}.`);
-    if (res.pulled.length) lines.push(`Brought here: ${names(res.pulled)}.`);
-    if (res.merged.length) lines.push(`Combined (first sync, nothing lost): ${names(res.merged)}.`);
-    res.conflicts.forEach(c => lines.push(`${partName(c.id)} had changed on both computers – kept ${c.kept}’s version (the other is saved in the sync-backups folder).`));
-    if (res.waiting && res.waiting.length) lines.push(`Waiting for you to sync: ${names(res.waiting)}.`);
-    return { title: lines.length ? 'Synced.' : 'Already up to date.', lines };
+    if (res.mode === 'save') {
+      if (res.pushed.length) lines.push(`Saved: ${names(res.pushed)}.`);
+      if (res.file) lines.push(`File: ${res.file.name} in “${res.file.folder}”${res.file.modifiedTime ? `, ${ago(res.file.modifiedTime)}` : ''}.`);
+      return { title: 'Saved to Google Drive.', lines };
+    }
+    if (res.pulled.length) lines.push(`Replaced from the save: ${names(res.pulled)}.`);
+    if (res.unchanged) lines.push(`Already the same: ${res.unchanged} ${res.unchanged === 1 ? 'part' : 'parts'}.`);
+    if (res.missing && res.missing.length) lines.push(`Not in the save, left as they are: ${names(res.missing)}.`);
+    return { title: res.pulled.length ? 'Loaded from Google Drive.' : 'Nothing to change.', lines };
   }
   async function refreshSync() {
     let st;
@@ -933,19 +936,19 @@
       const row = el('label', 'transfer-check'); const cb = el('input'); cb.type = 'checkbox'; cb.value = sec.id; cb.checked = st.parts.includes(sec.id);
       const t = el('span', 'transfer-check-text'); t.appendChild(el('b', null, sec.label)); if (sec.about) t.appendChild(el('small', null, sec.about)); row.append(cb, t); parts.appendChild(row);
     });
-    syncExtras(st);
-    if (st.folder && st.remote && st.remote.error) syncResultBox('error', st.remote.error);
-    else if (st.lastSyncAt && $('#syncResultLine').hidden) {
-      const s = st.lastSummary || {}; const bits = []; if (s.pushed && s.pushed.length) bits.push(`sent ${s.pushed.length}`); if (s.pulled && s.pulled.length) bits.push(`received ${s.pulled.length}`);
-      syncResultBox('ok', `Last synced ${ago(st.lastSyncAt)}.`, bits.length ? [bits.join(', ') + (plural(0, '').trim() ? '' : '')] : []);
-    }
+    driveUi(st);
+    // one plain sentence about what is in the folder for this API key
+    const t = $('#syncStatusText');
+    if (!st.folder) t.textContent = 'No Google Drive folder connected yet.';
+    else if (st.needsKey) t.textContent = 'Sign in with your AREDL API key first. Each API key has its own save file in the folder.';
+    else if (st.remoteError) t.textContent = `The folder couldn’t be checked (${st.remoteError}).`;
+    else if (st.remoteFile && st.remoteFile.exists) t.textContent = `Folder “${st.folderName}” has a save for this API key (${st.fileName}), last saved ${ago(st.remoteFile.modifiedTime)}.`;
+    else t.textContent = `Folder “${st.folderName}” has no save for this API key yet. Sync now creates it as ${st.fileName}.`;
   }
-  // this computer's name and a plain description of what is in the folder
-  // ---- Google Drive: sign in, create a folder, or pick an existing one (checked to be an AREDL save) ----
+  // ---- Google Drive: sign in, create a folder, or choose an existing one ----
   async function driveConnectAndReport(opts, okTitle, okLine) {
     const r = await window.aredl.driveConnect(opts).catch(err => ({ error: errMsg(err) }));
     if (r.error) { syncResultBox('error', r.error); return false; }
-    await window.aredl.syncSetEnabled(true);
     $('#syncResultLine').hidden = true; await refreshSync();
     syncResultBox('ok', okTitle, [okLine]);
     return true;
@@ -964,38 +967,15 @@
       if (!rows.length) list.appendChild(el('div', 'fx-note', r.folders.length ? 'No folder matches.' : 'This Google Drive has no folders yet. Create a new one instead.'));
       rows.forEach(f => {
         const b = el('button', 'fx-folder-row'); b.type = 'button';
-        b.append(el('span', 'fx-folder-name', f.name), f.hasSave ? el('span', 'fx-badge', 'AREDL save') : el('span', 'fx-folder-date', ''), el('span', 'fx-folder-date', f.modifiedTime ? ago(f.modifiedTime) : ''));
-        b.addEventListener('click', () => inspect(f));
+        b.append(el('span', 'fx-folder-name', f.name), f.hasSave ? el('span', 'fx-badge', 'Has your save') : el('span', 'fx-folder-date', ''), el('span', 'fx-folder-date', f.modifiedTime ? ago(f.modifiedTime) : ''));
+        b.addEventListener('click', async () => {
+          msg.textContent = `Connecting “${f.name}”…`;
+          m.close();
+          await driveConnectAndReport({ folderId: f.id, name: f.name, mode: 'use' }, `Folder “${f.name}” connected.`, f.hasSave ? 'It already has a save for this API key. Press “Sync now” to save this app to it, or to use it.' : 'It has no save for this API key yet. Press “Sync now” to save this app to it.');
+        });
         list.appendChild(b);
       });
     };
-    const reasons = { 'no-save': (n) => `“${n}” doesn’t contain an AREDL save, so it can’t be used as an existing folder. Choose another one, or create a new folder instead.`, 'not-aredl': (n) => `The sync file in “${n}” isn’t a valid AREDL save, so it was left alone.`, newer: (n) => `The save in “${n}” was made by a newer version of the app. Update this app first.` };
-    async function inspect(f) {
-      msg.textContent = `Checking “${f.name}”…`;
-      const res = await window.aredl.driveInspect(f.id).catch(err => ({ error: errMsg(err) }));
-      if (!m.overlay.isConnected) return;
-      if (res.error) { msg.textContent = `“${f.name}” couldn’t be checked (${res.error}).`; return; }
-      if (!res.valid) { msg.textContent = (reasons[res.reason] || reasons['not-aredl'])(f.name); return; }
-      choice(f, res);
-    }
-    function choice(f, res) {
-      m.body.replaceChildren();
-      m.body.appendChild(el('strong', null, `“${f.name}” holds an AREDL save`));
-      if (res.updated) m.body.appendChild(el('div', 'fx-note', `Last saved ${ago(res.updated)}.`));
-      res.parts.forEach(p => m.body.appendChild(el('div', 'transfer-detail', `${partName(p.id)} – saved by ${p.by ? `“${p.by}”` : 'an unknown computer'}${p.updatedAt ? `, ${ago(p.updatedAt)}` : ''}`)));
-      m.body.appendChild(el('div', 'fx-note small', 'Using the save brings its data to this computer; lists are combined with what is here so nothing is lost. Overwriting replaces the save in the folder with this computer’s data, and what the folder holds now is lost.'));
-      const row = el('div', 'fx-row');
-      const use = el('button', 'btn small-btn', 'Use this save'), over = el('button', 'btn btn-ghost small-btn danger', 'Overwrite it'), back = el('button', 'btn btn-ghost small-btn', 'Back');
-      row.append(use, over, back); m.body.appendChild(row);
-      back.addEventListener('click', () => { m.close(); driveChooseFolder(); });
-      use.addEventListener('click', async () => { use.disabled = over.disabled = true; m.close(); await driveConnectAndReport({ folderId: f.id, name: f.name, mode: 'use' }, `Using the save in “${f.name}”.`, 'Press “Sync now” to choose between saving this app to the folder or using the folder’s save.'); });
-      let armed = false;
-      over.addEventListener('click', async () => {
-        if (!armed) { armed = true; over.textContent = 'Click again to overwrite'; setTimeout(() => { armed = false; over.textContent = 'Overwrite it'; }, 4000); return; }
-        use.disabled = over.disabled = true; m.close();
-        await driveConnectAndReport({ folderId: f.id, name: f.name, mode: 'overwrite' }, `The save in “${f.name}” was overwritten.`, 'It now starts from this computer’s data. Choose the same folder on the other computer to bring it in.');
-      });
-    }
     search.addEventListener('input', draw);
     m.body.replaceChildren(search, list, msg); draw();
   }
@@ -1028,48 +1008,19 @@
       btns.append(go, cancel); box.appendChild(btns);
       return;
     }
-    box.appendChild(el('div', 'fx-hint', `Signed in as ${d.account || 'a Google account'}.${d.folder ? ` Syncing with the folder “${d.folder.name}”.` : ' No folder chosen yet.'}`));
+    box.appendChild(el('div', 'fx-hint', `Signed in as ${d.account || 'a Google account'}.${d.folder ? ` Folder: “${d.folder.name}”.` : ' No folder connected yet.'}`));
     const mk = el('button', 'btn btn-ghost small-btn', 'Create a new folder…'), ex = el('button', 'btn btn-ghost small-btn', 'Choose an existing folder…'), out = el('button', 'btn btn-ghost small-btn', 'Sign out');
     mk.addEventListener('click', async () => {
       const name = await askName({ title: 'New Google Drive folder', label: 'Folder name', value: 'AREDL Desktop', ok: 'Create folder' });
-      if (name) await driveConnectAndReport({ mode: 'create', name }, `Folder “${name}” created in Google Drive.`, 'Press “Sync now” and choose “Save this app to the folder”, then choose the same folder on the other computer.');
+      if (name) await driveConnectAndReport({ mode: 'create', name }, `Folder “${name}” created in Google Drive.`, 'It is empty. Press “Sync now” to save this app to it.');
     });
     ex.addEventListener('click', driveChooseFolder);
     out.addEventListener('click', async () => { await window.aredl.driveSignOut(); $('#syncResultLine').hidden = true; refreshSync(); });
     btns.append(mk, ex, out); box.appendChild(btns);
   }
-  async function syncExtras(st) {
-    driveUi(st);
-    const dev = $('#syncDevice'); if (dev && document.activeElement !== dev) { dev.value = st.device || ''; dev.dataset.saved = st.device || ''; $('#syncDeviceSave').hidden = true; }
-    const plan = $('#syncPlan'), line = $('#syncPlanLine');
-    if (!plan) return;
-    line.hidden = !st.folder; plan.replaceChildren();
-    if (!st.folder) return;
-    plan.appendChild(el('strong', null, st.provider ? `Folder in ${st.provider}` : 'Sync folder'));
-    plan.appendChild(el('div', 'transfer-detail', `This computer is “${st.device}”. The sync file is ${st.file}.`));
-    const pv = await window.aredl.syncPreview().catch(() => null);
-    if (!pv || !pv.ok) return;
-    const names = (a) => a.map(x => partName(x.id)).join(', ');
-    const by = (pv.parts.find(x => x.by) || {}).by;
-    const g = (act) => pv.parts.filter(x => x.action === act);
-    if (!pv.fileExists || (!g('receive').length && !g('merge').length && !g('newer').length && !g('same').length)) plan.appendChild(el('div', 'transfer-detail', `The folder is empty, so the first sync saves from this computer (“${pv.device}”). On the other computer, choose the same folder and sync to bring it in.`));
-    else plan.appendChild(el('div', 'transfer-detail', `The folder already has data${by ? ` saved by “${by}”` : ''}.`));
-    if (g('start').length) plan.appendChild(el('div', 'transfer-detail', `Saved from this computer first: ${names(g('start'))}.`));
-    if (g('receive').length) plan.appendChild(el('div', 'transfer-detail', `Brought in from the folder: ${names(g('receive'))}.`));
-    if (g('merge').length) plan.appendChild(el('div', 'transfer-detail', `Combined, nothing lost: ${names(g('merge'))}.`));
-    if (g('newer').length) plan.appendChild(el('div', 'transfer-detail', `The newer version wins: ${names(g('newer'))}.`));
-  }
   function wireSync() {
-    const dev = $('#syncDevice');
-    if (dev) {
-      dev.addEventListener('input', () => { $('#syncDeviceSave').hidden = dev.value.trim() === (dev.dataset.saved || ''); });
-      const save = async () => { await window.aredl.syncSetDevice(dev.value); $('#syncDeviceSave').hidden = true; refreshSync(); showToast('Computer name saved'); };
-      $('#syncDeviceSave').addEventListener('click', save);
-      dev.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
-    }
     $('#syncAuto').addEventListener('change', (e) => window.aredl.syncSetEnabled(e.target.checked));
     $('#syncParts').addEventListener('change', () => window.aredl.syncSetParts([...$('#syncParts').querySelectorAll('input:checked')].map(i => i.value)));
-    // Sync now: asks whether to save this app to the folder, or to use the folder's save to overwrite this app
     const runSync = async (choice) => {
       const btn = $('#syncNowBtn'); btn.disabled = true;
       try {
@@ -1080,17 +1031,19 @@
         const d = describeSync(res); syncResultBox('ok', d.title, d.lines); refreshSync();
       } catch (err) { syncResultBox('error', `The sync failed: ${errMsg(err)}`); } finally { btn.disabled = false; }
     };
+    // Sync now: asks whether to save this app to the folder, or to use the folder's save to overwrite this app
     $('#syncNowBtn').addEventListener('click', async () => {
       const st = await window.aredl.syncStatus().catch(() => null);
-      if (!st || !st.folder) { syncResultBox('error', 'Connect a Google Drive folder first (Google Drive account, above).'); return; }
+      if (!st || !st.folder) { syncResultBox('error', 'Connect a Google Drive folder first (Google Drive folder, above).'); return; }
+      if (st.needsKey) { syncResultBox('error', 'Sign in with your AREDL API key first. Each API key has its own save file in the folder.'); return; }
+      const has = !!(st.remoteFile && st.remoteFile.exists);
       const m = openModal({ title: 'Sync now' });
-      const where = st.displayFolder || st.folder;
-      m.body.appendChild(el('div', 'fx-note', `Folder: ${where}`));
-      m.body.appendChild(el('div', 'fx-note', 'Choose which side is kept. The copy that gets replaced is saved in the sync-backups folder first.'));
+      m.body.appendChild(el('div', 'fx-note', `Folder: Google Drive › ${st.folderName}`));
+      m.body.appendChild(el('div', 'fx-note', has ? `It has a save for this API key, last saved ${ago(st.remoteFile.modifiedTime)}.` : 'It has no save for this API key yet.'));
       const row = el('div', 'fx-row');
       const save = el('button', 'btn small-btn', 'Save this app to the folder'), use = el('button', 'btn btn-ghost small-btn', 'Use the folder’s save'), cancel = el('button', 'btn btn-ghost small-btn', 'Cancel');
-      row.append(save, use, cancel); m.body.appendChild(row);
-      m.body.appendChild(el('div', 'fx-note small', 'Saving replaces what the folder holds with this app’s data. Using the folder’s save replaces this app’s data with what the folder holds, and the app reloads.'));
+      use.disabled = !has; row.append(save, use, cancel); m.body.appendChild(row);
+      m.body.appendChild(el('div', 'fx-note small', has ? 'Saving replaces the folder’s save with this app’s data. Using the folder’s save replaces this app’s data with it, and the app reloads.' : 'Saving creates the save in the folder. Using the folder’s save is available once it exists.'));
       save.addEventListener('click', () => { m.close(); runSync('save'); });
       use.addEventListener('click', () => { m.close(); runSync('load'); });
       cancel.addEventListener('click', () => m.close());
@@ -1099,7 +1052,7 @@
       const saved = sessionStorage.getItem(SYNC_REPORT_KEY);
       if (saved) { sessionStorage.removeItem(SYNC_REPORT_KEY); const res = JSON.parse(saved); setTimeout(async () => { syncSections = await window.aredl.transferInfo().catch(() => []); showTab('settings'); const d = describeSync(res); syncResultBox('ok', d.title, d.lines); $('#syncResultLine').scrollIntoView({ block: 'center' }); }, 800); }
     } catch { /* no summary */ }
-    window.aredl.onSyncWaiting((parts) => actionToast(`Changes from your other computer are waiting (${parts.length} ${parts.length === 1 ? 'part' : 'parts'}).`, 'Sync now', () => { showTab('settings'); setTimeout(() => $('#syncNowBtn').click(), 350); }));
+    window.aredl.onSyncWaiting((parts) => actionToast(`Changes from another computer are waiting (${parts.length} ${parts.length === 1 ? 'part' : 'parts'}).`, 'Sync now', () => { showTab('settings'); setTimeout(() => $('#syncNowBtn').click(), 350); }));
   }
   fx.onSettingsShown = () => { refreshSync(); $('#songBulkInfo').textContent = songInfoText(); };
 

@@ -73,12 +73,22 @@ function createMacUpdater({ app, dialog, shell, getWindow, owner, repo, apiBase 
   }
 
   async function latest() {
-    const res = await fetchImpl(`${apiBase}/repos/${owner}/${repo}/releases/latest`, {
-      headers: { 'User-Agent': 'AREDL-Desktop', Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
-    const rel = await res.json();
+    if (!owner || !repo) throw new Error('The GitHub repository this app updates from is not set (see "repository" in package.json).');
+    const get = (url) => fetchImpl(url, { headers: { 'User-Agent': 'AREDL-Desktop', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10000) });
+    let rel = null;
+    const res = await get(`${apiBase}/repos/${owner}/${repo}/releases/latest`);
+    if (res.ok) rel = await res.json();
+    else if (res.status === 404) {
+      // GitHub answers 404 for "latest" when no release is marked as the latest one (a draft, a pre-release, or none yet).
+      // Look through the list of releases instead and take the newest one that is published.
+      const list = await get(`${apiBase}/repos/${owner}/${repo}/releases?per_page=30`);
+      if (list.ok) {
+        const all = (await list.json()).filter(r => r && !r.draft && r.tag_name);
+        all.sort((a, b) => (isNewerVersion(a.tag_name, b.tag_name) ? -1 : isNewerVersion(b.tag_name, a.tag_name) ? 1 : 0));
+        rel = all[0] || null;
+      } else if (list.status !== 404) throw new Error(`GitHub answered ${list.status}`);
+      if (!rel) throw new Error(`No published release found for ${owner}/${repo}. The repository has to be public and the release published, not a draft.`);
+    } else throw new Error(`GitHub answered ${res.status}`);
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
     return {
       version: String(rel.tag_name || '').replace(/^v/i, ''),
@@ -179,7 +189,7 @@ function createMacUpdater({ app, dialog, shell, getWindow, owner, repo, apiBase 
       downloadAndPrompt(rel, target); // in the background, like the Windows download
       return { status: 'available', version: rel.version };
     } catch (err) {
-      return { status: 'error', message: String((err && err.message) || err).split('\n')[0].slice(0, 160) };
+      return { status: 'error', message: String((err && err.message) || err).split('\n')[0].slice(0, 220) };
     } finally {
       state.checking = false;
     }

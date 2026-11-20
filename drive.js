@@ -7,7 +7,8 @@
 //
 // Sync itself is unchanged (sync.js works on a folder on disk). For Google Drive that folder is a small local copy:
 // before a sync the sync file is downloaded from the chosen Drive folder into it, and afterwards it is uploaded again if
-// it changed. Only that one file (AREDL-Desktop-sync.json) is ever read or written; folders are only listed.
+// it changed. Each AREDL API key has its own save file in the folder (the name comes from main.js); only that file is
+// ever read or written, and folders are only listed.
 // ---------------------------------------------------------------------------
 const fs = require('fs');
 const path = require('path');
@@ -15,7 +16,6 @@ const http = require('http');
 const crypto = require('crypto');
 
 const SCOPE = 'https://www.googleapis.com/auth/drive';
-const FILE_NAME = 'AREDL-Desktop-sync.json';
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const FORMAT = 1;
 let builtin = {};
@@ -27,12 +27,16 @@ const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 const md5 = (text) => crypto.createHash('md5').update(text).digest('hex');
 
-function createDrive({ userDataDir, safeStorage, openExternal, request, log = console }) {
+const NEEDS_KEY = 'Sign in with your AREDL API key first. Each API key has its own save file in the folder.';
+
+function createDrive({ userDataDir, safeStorage, openExternal, request, fileName = () => null, log = console }) {
   const tokenPath = () => path.join(userDataDir(), 'drive-token.bin');
   const clientPath = () => path.join(userDataDir(), 'drive-client.json');
   const statePath = () => path.join(userDataDir(), 'drive-sync.json');
   const cacheDir = () => path.join(userDataDir(), 'drive-cache');
-  const cacheFile = () => path.join(cacheDir(), FILE_NAME);
+  // the save file of the current API key (throws when nobody is signed in to AREDL)
+  const FILE = () => { const n = fileName(); if (!n) throw new Error(NEEDS_KEY); return n; };
+  const cacheFile = () => path.join(cacheDir(), FILE());
 
   // ---- the OAuth client (made by the person who builds / uses the app in Google Cloud Console) ----
   function client() {
@@ -152,8 +156,9 @@ function createDrive({ userDataDir, safeStorage, openExternal, request, log = co
     return info();
   }
 
-  // ---- folders and the sync file ----
+  // ---- folders and the save file ----
   const q = (s) => encodeURIComponent(s);
+  const entry = () => { const st = loadState(); if (!isObj(st.files)) st.files = {}; const n = FILE(); if (!isObj(st.files[n])) st.files[n] = { fileId: null, md5: null }; return st.files[n]; };
   async function listFolders() {
     const folders = [], saves = new Map();
     let page = '';
@@ -162,90 +167,83 @@ function createDrive({ userDataDir, safeStorage, openExternal, request, log = co
       folders.push(...(r.files || []));
       if (!r.nextPageToken) break; page = `&pageToken=${encodeURIComponent(r.nextPageToken)}`;
     }
-    const s = await api('GET', `https://www.googleapis.com/drive/v3/files?q=${q(`name='${FILE_NAME}' and trashed=false`)}&fields=files(id,parents,modifiedTime)&pageSize=100`, {}, 'Google Drive: looked for AREDL saves');
-    (s.files || []).forEach(f => (f.parents || []).forEach(p => saves.set(p, f.modifiedTime)));
+    const mine = fileName();
+    if (mine) { // which folders already hold the save of this API key
+      const f = await api('GET', `https://www.googleapis.com/drive/v3/files?q=${q(`name='${mine}' and trashed=false`)}&fields=files(id,parents,modifiedTime)&pageSize=100`, {}, 'Google Drive: looked for the save');
+      (f.files || []).forEach(x => (x.parents || []).forEach(p => saves.set(p, x.modifiedTime)));
+    }
     return folders.map(f => ({ id: f.id, name: f.name, modifiedTime: f.modifiedTime, hasSave: saves.has(f.id), saveModified: saves.get(f.id) || null }))
       .sort((a, b) => (b.hasSave - a.hasSave) || String(b.modifiedTime).localeCompare(String(a.modifiedTime)));
   }
   async function findFile(folderId) {
     if (!/^[\w-]{5,}$/.test(String(folderId))) throw new Error('That folder isn’t valid.');
-    const r = await api('GET', `https://www.googleapis.com/drive/v3/files?q=${q(`'${folderId}' in parents and name='${FILE_NAME}' and trashed=false`)}&fields=files(id,name,modifiedTime,md5Checksum,size)&orderBy=modifiedTime%20desc&pageSize=5`, {}, 'Google Drive: looked for the sync file');
+    const r = await api('GET', `https://www.googleapis.com/drive/v3/files?q=${q(`'${folderId}' in parents and name='${FILE()}' and trashed=false`)}&fields=files(id,name,modifiedTime,md5Checksum,size)&orderBy=modifiedTime%20desc&pageSize=5`, {}, 'Google Drive: looked for the save');
     return (r.files || [])[0] || null;
   }
-  // is this folder really an AREDL save? (the file exists, and is a sync file this version understands)
-  async function inspect(folderId) {
-    const file = await findFile(folderId);
-    if (!file) return { valid: false, reason: 'no-save' };
-    if (Number(file.size) > 40 * 1024 * 1024) return { valid: false, reason: 'not-aredl' };
-    let doc;
-    try { doc = JSON.parse(await api('GET', `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { text: true }, 'Google Drive: read the sync file')); } catch (err) { return { valid: false, reason: 'not-aredl', detail: err.message }; }
-    if (!isObj(doc) || !isObj(doc.sections) || !Number.isFinite(Number(doc['aredl-desktop-sync']))) return { valid: false, reason: 'not-aredl' };
-    if (Number(doc['aredl-desktop-sync']) > FORMAT) return { valid: false, reason: 'newer' };
-    const parts = Object.keys(doc.sections).filter(k => isObj(doc.sections[k])).map(k => ({ id: k, by: typeof doc.sections[k].by === 'string' ? doc.sections[k].by.slice(0, 40) : null, updatedAt: doc.sections[k].updatedAt || null }));
-    return { valid: true, fileId: file.id, updated: doc.updated || file.modifiedTime || null, parts };
+  // what the connected folder holds for this API key right now (asked of Google Drive itself)
+  async function peek() {
+    const s = loadState();
+    if (!s.folderId || !loadTokens() || !fileName()) return { exists: false };
+    const f = await findFile(s.folderId);
+    return f ? { exists: true, modifiedTime: f.modifiedTime || null, size: Number(f.size) || 0 } : { exists: false };
   }
   async function createFolder(name) {
     const r = await api('POST', 'https://www.googleapis.com/drive/v3/files?fields=id,name', { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: String(name || 'AREDL Desktop').slice(0, 100), mimeType: FOLDER_MIME }) }, 'Google Drive: made a folder');
     return { id: r.id, name: r.name };
   }
   async function upload(folderId, fileId, text) {
-    const fields = 'id,md5Checksum,modifiedTime';
-    if (fileId) return api('PATCH', `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=${fields}`, { headers: { 'Content-Type': 'application/json' }, body: text }, 'Google Drive: saved the sync file');
+    const fields = 'id,md5Checksum,modifiedTime,size';
+    if (fileId) return api('PATCH', `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media&fields=${fields}`, { headers: { 'Content-Type': 'application/json' }, body: text }, 'Google Drive: saved the save file');
     const boundary = `aredl${crypto.randomBytes(8).toString('hex')}`;
-    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: FILE_NAME, parents: [folderId], mimeType: 'application/json' })}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${text}\r\n--${boundary}--`;
-    return api('POST', `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${fields}`, { headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body }, 'Google Drive: saved the sync file');
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: FILE(), parents: [folderId], mimeType: 'application/json' })}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${text}\r\n--${boundary}--`;
+    return api('POST', `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${fields}`, { headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body }, 'Google Drive: saved the save file');
   }
 
   // ---- used around every sync ----
   const active = () => { const s = loadState(), t = loadTokens(); return !!(s.folderId && t); };
-  async function pull() { // newest copy of the sync file from Drive into the local copy
-    const s = loadState();
+  async function pull() { // newest copy of this API key's save from Drive into the local copy
+    const s = loadState(), e = entry();
     const file = await findFile(s.folderId);
-    if (!file) return { exists: false };
-    s.fileId = file.id;
-    if (file.md5Checksum !== s.md5 || !fs.existsSync(cacheFile())) {
-      const text = await api('GET', `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { text: true }, 'Google Drive: read the sync file');
+    if (!file) { e.fileId = null; e.md5 = null; try { fs.rmSync(cacheFile(), { force: true }); } catch { /* nothing cached */ } saveState(); return { exists: false }; }
+    e.fileId = file.id;
+    if (file.md5Checksum !== e.md5 || !fs.existsSync(cacheFile())) {
+      const text = await api('GET', `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, { text: true }, 'Google Drive: read the save');
       fs.mkdirSync(cacheDir(), { recursive: true });
       const tmp = `${cacheFile()}.${process.pid}.tmp`; fs.writeFileSync(tmp, text); fs.renameSync(tmp, cacheFile());
-      s.md5 = file.md5Checksum || md5(text);
+      e.md5 = file.md5Checksum || md5(text);
     }
     saveState();
     return { exists: true };
   }
-  async function push() { // the local copy to Drive, only if it changed
-    const s = loadState();
+  async function push() { // the local copy to Drive, only if it changed; Google's answer is checked against what was sent
+    const s = loadState(), e = entry();
     if (!fs.existsSync(cacheFile())) return { uploaded: false };
     const text = fs.readFileSync(cacheFile(), 'utf8');
-    if (md5(text) === s.md5) return { uploaded: false };
-    const r = await upload(s.folderId, s.fileId, text);
-    s.fileId = r.id; s.md5 = r.md5Checksum || md5(text); saveState();
-    return { uploaded: true };
+    if (md5(text) === e.md5) return { uploaded: false };
+    const r = await upload(s.folderId, e.fileId, text);
+    if (!r || !r.id) throw new Error('Google Drive did not confirm the upload.');
+    if (r.md5Checksum && r.md5Checksum !== md5(text)) throw new Error('Google Drive kept a different file than the one sent.');
+    e.fileId = r.id; e.md5 = r.md5Checksum || md5(text); saveState();
+    return { uploaded: true, name: FILE(), folder: s.folderName, modifiedTime: r.modifiedTime || null, size: Number(r.size) || Buffer.byteLength(text) };
   }
-  // mode: 'use' (bring the existing save in), 'overwrite' (start the save again from this computer), 'create' (a new folder)
+  // mode: 'use' (an existing folder) or 'create' (a new folder). Nothing is uploaded here: the save file is only made
+  // by Sync now, so a folder that is connected but never saved to stays empty.
   async function connect({ folderId, name, mode }) {
     let id = folderId, label = name;
     if (mode === 'create') { const f = await createFolder(name); id = f.id; label = f.name; }
     if (!/^[\w-]{5,}$/.test(String(id))) throw new Error('That folder isn’t valid.');
-    state = { folderId: id, folderName: String(label || 'Folder').slice(0, 100), fileId: null, md5: null };
+    state = { folderId: id, folderName: String(label || 'Folder').slice(0, 100), files: {} };
+    try { fs.rmSync(cacheDir(), { recursive: true, force: true }); } catch { /* nothing cached */ }
     fs.mkdirSync(cacheDir(), { recursive: true });
-    if (mode === 'use') {
-      const r = await pull();
-      if (!r.exists) { state = {}; saveState(); throw new Error('That folder no longer has an AREDL save.'); }
-    } else {
-      const existing = mode === 'overwrite' ? await findFile(id) : null;
-      if (existing) state.fileId = existing.id;
-      fs.writeFileSync(cacheFile(), JSON.stringify({ 'aredl-desktop-sync': FORMAT, sections: {}, updated: new Date().toISOString() }));
-      await push();
-    }
     saveState();
     return info();
   }
-  function disconnect() { state = {}; saveState(); try { fs.rmSync(cacheFile(), { force: true }); } catch { /* nothing to remove */ } }
+  function disconnect() { state = {}; saveState(); try { fs.rmSync(cacheDir(), { recursive: true, force: true }); } catch { /* nothing to remove */ } }
   function info() {
     const c = client(), t = loadTokens(), s = loadState();
-    return { configured: !!(c.clientId && c.clientSecret), builtIn: c.builtIn, signedIn: !!t, account: t ? t.email : null, folder: t && s.folderId ? { id: s.folderId, name: s.folderName } : null, cacheDir: cacheDir(), fileName: FILE_NAME };
+    return { configured: !!(c.clientId && c.clientSecret), builtIn: c.builtIn, signedIn: !!t, account: t ? t.email : null, folder: t && s.folderId ? { id: s.folderId, name: s.folderName } : null, cacheDir: cacheDir() };
   }
-  return { info, setClient, signIn, cancelSignIn, signOut, listFolders, inspect, connect, disconnect, active, pull, push, cacheDir };
+  return { info, setClient, signIn, cancelSignIn, signOut, listFolders, peek, connect, disconnect, active, pull, push, cacheDir };
 }
 
-module.exports = { createDrive, FILE_NAME };
+module.exports = { createDrive };

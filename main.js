@@ -842,8 +842,14 @@ ipcMain.handle('transfer:undo', async () => {
 
 // ---- Sync between computers through a shared folder (the rules live in sync.js) ----
 const { createSync } = require('./sync');
-const { createDrive, FILE_NAME: SYNC_FILE_NAME } = require('./drive');
-const drive = createDrive({ userDataDir, safeStorage, openExternal: (u) => shell.openExternal(u), request: (url, options, what) => miscFetch(url, options, what), log: console });
+const { createDrive } = require('./drive');
+// Every AREDL API key has its own save file: AREDL-Desktop-<first 16 characters of a SHA-256 of the key>.json.
+// (A fingerprint rather than the key itself, so the key never appears in a file name in Google Drive.)
+function syncFileName() {
+  const key = loadApiKey();
+  return key ? `AREDL-Desktop-${require('crypto').createHash('sha256').update(String(key)).digest('hex').slice(0, 16)}.json` : null;
+}
+const drive = createDrive({ userDataDir, safeStorage, openExternal: (u) => shell.openExternal(u), request: (url, options, what) => miscFetch(url, options, what), fileName: syncFileName, log: console });
 const SYNC_FILES_OF = { settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], personal: ['personal'], notifications: ['notifications'], following: ['following', 'followNotifications'] };
 const writeJson = (file, data) => fs.writeFileSync(file, JSON.stringify(data));
 const syncer = createSync({
@@ -857,50 +863,58 @@ const syncer = createSync({
       else writeJson(TRANSFER_FILES[id](), payload);
     },
   },
+  fileName: syncFileName,
   log: console,
 });
-// A sync with a Google Drive folder: fetch the sync file first, sync as usual, then upload it again if it changed.
+// A sync with a Google Drive folder: fetch the save file first, sync as usual, then upload it again if it changed.
 async function safeSync(mode) {
   try {
-    if (!drive.active()) return syncer.syncNow(mode);
+    if (!drive.active() || !syncFileName()) return syncer.syncNow(mode); // without a folder / a sign-in it says what is missing
     try { await drive.pull(); } catch (err) { return { ok: false, error: `Google Drive: ${err.message}` }; }
     const res = syncer.syncNow(mode);
-    if (res.ok) { try { await drive.push(); } catch (err) { return { ok: false, error: `Google Drive: the changes couldn’t be uploaded (${err.message}).` }; } }
+    if (res.ok) {
+      try { const up = await drive.push(); if (up.uploaded) res.file = { name: up.name, folder: up.folder, modifiedTime: up.modifiedTime, size: up.size }; }
+      catch (err) { syncer.reset(); return { ok: false, error: `Google Drive: the changes couldn’t be uploaded (${err.message}).` }; } // reset: nothing counts as saved
+    }
     return res;
   } catch (err) { return { ok: false, error: `Sync failed: ${err.message}` }; }
 }
-const withDrive = (st) => {
-  const d = drive.info();
-  if (!d.folder) return { ...st, drive: d };
-  return { ...st, drive: d, provider: 'Google Drive', folderOk: true, displayFolder: `Google Drive › ${d.folder.name}${d.account ? ` (${d.account})` : ''}`, file: `${d.folder.name} › ${SYNC_FILE_NAME}` };
-};
-ipcMain.handle('sync:status', async () => withDrive(syncer.status()));
+ipcMain.handle('sync:status', async () => {
+  const st = syncer.status(), d = drive.info();
+  const out = { ...st, drive: d, folderName: d.folder ? d.folder.name : null, account: d.account };
+  if (d.folder && !st.needsKey) {
+    try { out.remoteFile = await Promise.race([drive.peek(), new Promise((_r, rej) => setTimeout(() => rej(new Error('Google Drive did not answer in time')), 8000))]); }
+    catch (err) { out.remoteError = err.message; }
+  }
+  return out;
+});
 // ---- Google Drive (the rules live in drive.js) ----
 const driveErr = (err) => ({ error: (err && err.message) || 'Something went wrong.' });
 ipcMain.handle('drive:info', async () => drive.info());
 ipcMain.handle('drive:setClient', async (_e, id, secret) => { drive.setClient(id, secret); return drive.info(); });
 ipcMain.handle('drive:signIn', async () => { try { return await drive.signIn(); } catch (err) { return driveErr(err); } });
 ipcMain.handle('drive:cancelSignIn', async () => { drive.cancelSignIn(); return true; });
-ipcMain.handle('drive:signOut', async () => { try { const r = await drive.signOut(); return r; } catch (err) { return driveErr(err); } });
+ipcMain.handle('drive:signOut', async () => { try { const r = await drive.signOut(); syncer.disconnect(); return r; } catch (err) { return driveErr(err); } });
 ipcMain.handle('drive:listFolders', async () => { try { return { folders: await drive.listFolders() }; } catch (err) { return driveErr(err); } });
-ipcMain.handle('drive:inspect', async (_e, folderId) => { try { return await drive.inspect(folderId); } catch (err) { return driveErr(err); } });
 ipcMain.handle('drive:connect', async (_e, opts) => {
   try {
-    const mode = ['use', 'overwrite', 'create'].includes(opts && opts.mode) ? opts.mode : null;
-    if (!mode) return { error: 'Choose what to do with the folder.' };
+    const mode = ['use', 'create'].includes(opts && opts.mode) ? opts.mode : null;
+    if (!mode) return { error: 'Choose a folder.' };
     await drive.connect({ folderId: opts.folderId, name: opts.name, mode });
-    syncer.setFolder(drive.cacheDir()); syncer.reset(); syncer.setEnabled(true);
-    return withDrive(syncer.status());
+    syncer.setFolder(drive.cacheDir()); syncer.reset(); syncer.setEnabled(false); // automatic saving starts after the first Sync now
+    return drive.info();
   } catch (err) { return driveErr(err); }
 });
-ipcMain.handle('sync:preview', async () => { if (drive.active()) { try { await drive.pull(); } catch (err) { return { ok: false, error: err.message }; } } return syncer.preview(); });
-ipcMain.handle('sync:setDevice', async (_e, name) => syncer.setDevice(name));
 ipcMain.handle('sync:setEnabled', async (_e, on) => syncer.setEnabled(!!on));
 ipcMain.handle('sync:setParts', async (_e, parts) => syncer.setParts(parts));
-ipcMain.handle('sync:disconnect', async () => { drive.disconnect(); return withDrive(syncer.disconnect()); });
+ipcMain.handle('sync:disconnect', async () => { drive.disconnect(); return syncer.disconnect(); });
 // choice: 'save' = this app's data replaces the folder's; 'load' = the folder's data replaces this app's
+// choice: 'save' = this app's data replaces the folder's save; 'load' = the folder's save replaces this app's data
 ipcMain.handle('sync:now', async (_e, choice) => {
-  const res = await safeSync(choice === 'save' ? 'save' : choice === 'load' ? 'load' : 'full');
+  if (choice !== 'save' && choice !== 'load') return { ok: false, error: 'Choose whether to save to the folder or to use its save.' };
+  const first = !syncer.status().lastSyncAt;
+  const res = await safeSync(choice);
+  if (res.ok && first) syncer.setEnabled(true); // after the first Save / Use, changes made here are saved automatically
   if (res.ok && (res.pulled.length || res.merged.length)) res.reload = true; // something here changed: the page reloads to use it
   return res;
 });
@@ -1107,8 +1121,14 @@ let autoUpdater = null;
 // Mac: electron-updater can't be used (it needs a paid Apple certificate), so mac-updater.js does the same job
 let macUpdater = null;
 function setupMacUpdates() {
-  const pub = (require('./package.json').build || {}).publish || {};
-  macUpdater = require('./mac-updater').createMacUpdater({ app, dialog, shell, getWindow: () => mainWindow, owner: pub.owner, repo: pub.repo });
+  // electron-builder removes the "build" section from the package.json inside the packaged app, so the repository is
+  // read from "repository" (kept in the package) and only then from "build.publish" (present when run from source)
+  const pkg = require('./package.json');
+  const repoUrl = String((pkg.repository && pkg.repository.url) || pkg.repository || '');
+  const fromUrl = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(repoUrl);
+  const pub = (pkg.build || {}).publish || {};
+  const owner = fromUrl ? fromUrl[1] : pub.owner, repo = fromUrl ? fromUrl[2] : pub.repo;
+  macUpdater = require('./mac-updater').createMacUpdater({ app, dialog, shell, getWindow: () => mainWindow, owner, repo });
   return macUpdater.start();
 }
 function setupAutoUpdate() {
