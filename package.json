@@ -1,6 +1,6 @@
 {
   "name": "aredl-desktop",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "AREDL Desktop",
   "main": "main.js",
   "author": "you",
@@ -28,6 +28,10 @@
       "main.js",
       "mac-updater.js",
       "settings-transfer.js",
+      "sync.js",
+      "drive.js",
+      "drive-config.js",
+      "drive-config.local.js",
       "preload.js",
       "renderer/**/*",
       "assets/**/*",

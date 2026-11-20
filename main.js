@@ -78,7 +78,7 @@ const ENDPOINTS = {
   notifications: `${API_BASE}/users/@me/notifications`, // one feed for the account, not per list
   profile: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/profile/${id}`,
   changelog: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/changelog?page=${page}`,
-  leaderboard: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/leaderboard?page=${page}&per_page=50`,
+  leaderboard: (page, mode, per = 50) => `${API_BASE}/${apiPrefix(mode)}/leaderboard?page=${page}&per_page=${per}`,
   countries: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/leaderboard/countries?page=${page}&per_page=50`,
   country: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/country/${encodeURIComponent(id)}`,
 };
@@ -189,6 +189,7 @@ const requestLog = [];
 const REQUEST_LOG_MAX = 500;
 
 function logRequest(entry) {
+  if (!entry.kind) entry.kind = 'api'; // 'api' = api.aredl.net, 'misc' = everything else (song lookups...)
   requestLog.push(entry);
   if (requestLog.length > REQUEST_LOG_MAX) requestLog.shift();
   if (mainWindow) mainWindow.webContents.send('requestLog:new', entry);
@@ -460,7 +461,7 @@ function createTray() {
 // ---------------------------------------------------------------------------
 // Small JSON lists kept in the app's data folder (followed levels and the
 // update notifications they produce). Only these names are allowed.
-const STORE_NAMES = new Set(['following', 'follow-notifications', 'personal-list']);
+const STORE_NAMES = new Set(['following', 'follow-notifications', 'personal-list', 'custom-lists', 'saved-filters']);
 const storePath = (name) => path.join(userDataDir(), `${name}.json`);
 ipcMain.handle('store:get', async (_e, name) => {
   if (!STORE_NAMES.has(name)) return [];
@@ -506,12 +507,21 @@ function metaContent(html, prop) {
   const b = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*?(?:property|name)=["']${prop}["']`, 'i').exec(html);
   return b ? decodeEntities(b[1]) : '';
 }
+// every request that isn't to the AREDL API is written to the log too (as 'misc'), so Settings shows everything the app sends
+async function miscFetch(url, options, what) {
+  const startedAt = Date.now();
+  let res;
+  try { res = await fetch(url, options); }
+  catch (err) { logRequest({ kind: 'misc', what, url, status: null, ok: false, timestamp: startedAt, error: err.message }); throw err; }
+  logRequest({ kind: 'misc', what, url, status: res.status, ok: res.ok || res.status === 404, timestamp: startedAt, error: res.ok ? undefined : `HTTP ${res.status}` });
+  return res;
+}
 async function fetchNewgroundsSong(id) {
-  const res = await fetch(`https://www.newgrounds.com/audio/listen/${id}`, {
+  const res = await miscFetch(`https://www.newgrounds.com/audio/listen/${id}`, {
     headers: { 'User-Agent': SONG_UA, Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'en-US,en;q=0.8' },
     redirect: 'follow',
     signal: AbortSignal.timeout(9000),
-  });
+  }, `Looked up song ${id} on Newgrounds`);
   if (res.status === 404) throw new Error('That song is not on Newgrounds (removed?)');
   if (!res.ok) throw new Error(`Newgrounds answered ${res.status}`);
   const html = await res.text();
@@ -541,18 +551,50 @@ async function fetchNewgroundsSong(id) {
 }
 // Geometry Dash's own song lookup - the reply is "key~|~value~|~key~|~value...", with 2 = name and 4 = artist.
 async function fetchGdSong(id) {
-  const res = await fetch('https://www.boomlings.com/database/getGJSongInfo.php', {
+  const res = await miscFetch('https://www.boomlings.com/database/getGJSongInfo.php', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': '' },
     body: `songID=${id}&secret=Wmfd2893gb7`,
     signal: AbortSignal.timeout(7000),
-  });
+  }, `Looked up song ${id} on the game server`);
   const text = (await res.text()).trim();
   if (!res.ok || !text.includes('~|~')) throw new Error('The game server has no such song');
   const parts = text.split('~|~'), map = {};
   for (let i = 0; i + 1 < parts.length; i += 2) map[parts[i]] = parts[i + 1];
   return { name: decodeEntities(map['2'] || ''), artist: decodeEntities(map['4'] || '') };
 }
+// every song name known so far, for showing on level cards without asking for anything
+ipcMain.handle('song:getCache', async () => {
+  const c = loadSongCache(), out = {};
+  for (const [id, v] of Object.entries(c)) if (v && typeof v.name === 'string') out[id] = { name: v.name, artist: v.artist || '' };
+  return out;
+});
+// Looks up many songs one after another, slowly (about one a second) so Newgrounds isn't hammered. Only runs when asked.
+const songBulk = { running: false, stop: false, total: 0, done: 0, failed: 0, current: null, startedAt: 0 };
+const sendSongProgress = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('song:bulkProgress', { ...songBulk }); };
+ipcMain.handle('song:bulkStart', async (_e, ids) => {
+  if (songBulk.running) return { ok: false, error: 'Already running.' };
+  const cache = loadSongCache();
+  const todo = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(n => Number.isInteger(n) && n > 0 && n <= 1e9 && !cache[n]))].slice(0, 5000);
+  Object.assign(songBulk, { running: true, stop: false, total: todo.length, done: 0, failed: 0, current: null, startedAt: Date.now() });
+  sendSongProgress();
+  (async () => {
+    for (const id of todo) {
+      if (songBulk.stop) break;
+      songBulk.current = id;
+      let ok = false;
+      try { ok = (await lookupSong(id, false)).ok; } catch { ok = false; }
+      songBulk.done++; if (!ok) songBulk.failed++;
+      sendSongProgress();
+      await new Promise(r => setTimeout(r, 1100));
+    }
+    songBulk.running = false; songBulk.current = null;
+    sendSongProgress();
+  })();
+  return { ok: true, total: todo.length };
+});
+ipcMain.handle('song:bulkStop', async () => { songBulk.stop = true; sendSongProgress(); return true; });
+ipcMain.handle('song:bulkStatus', async () => ({ ...songBulk }));
 const songInflight = new Map();
 async function lookupSong(id, force = false) {
   const cache = loadSongCache();
@@ -604,18 +646,22 @@ const readList = (file) => { try { const d = JSON.parse(fs.readFileSync(file, 'u
 const TRANSFER_FILES = {
   settings: settingsPath,
   favourites: favouritesPath,
+  lists: () => storePath('custom-lists'),
+  filters: () => storePath('saved-filters'),
   following: () => storePath('following'),
   followNotifications: () => storePath('follow-notifications'),
   personal: () => storePath('personal-list'),
   notifications: clearedNotifsPath,
 };
 const FILES_OF = { // which files each part of an import touches
-  settings: ['settings'], favourites: ['favourites'], following: ['following', 'followNotifications'], personal: ['personal'], notifications: ['notifications'],
+  settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], following: ['following', 'followNotifications'], personal: ['personal'], notifications: ['notifications'],
 };
 function gatherTransferSources() {
   return {
     settings: loadSettings(),
     favourites: readList(TRANSFER_FILES.favourites()),
+    customLists: readList(TRANSFER_FILES.lists()),
+    savedFilters: readList(TRANSFER_FILES.filters()),
     following: readList(TRANSFER_FILES.following()),
     followNotifications: readList(TRANSFER_FILES.followNotifications()),
     personal: readList(TRANSFER_FILES.personal()),
@@ -629,6 +675,24 @@ const countLine = (doc) => transfer.SECTIONS
     const n = s.id === 'settings' ? Object.keys(doc.settings).length : s.id === 'following' ? (doc.data.following || []).length : (doc.data[s.id] || []).length;
     return { id: s.id, label: s.label, count: n };
   });
+
+// A single custom list as one line of text (AREDL-LIST:...), for sharing; and back again (cleaned like any import)
+const LIST_PREFIX = 'AREDL-LIST:';
+ipcMain.handle('list:toText', async (_e, list) => {
+  const c = transfer.cleanList('lists', [{ ...(list || {}), id: 'x' }]).items[0];
+  if (!c) return { ok: false };
+  return { ok: true, text: LIST_PREFIX + require('zlib').deflateSync(Buffer.from(JSON.stringify({ name: c.name, items: c.items }))).toString('base64url') };
+});
+ipcMain.handle('list:fromText', async (_e, input) => {
+  const bad = { ok: false, error: "That doesn't look like a shared list. Paste the text exactly as it was copied." };
+  if (typeof input !== 'string' || input.length > 4 * 1024 * 1024) return bad;
+  let text = input.trim().replace(/^["'`]+|["'`]+$/g, '').replace(/\s+/g, '');
+  if (text.startsWith(LIST_PREFIX)) text = text.slice(LIST_PREFIX.length);
+  let data;
+  try { data = JSON.parse(require('zlib').inflateSync(Buffer.from(text, 'base64url'), { maxOutputLength: 8 * 1024 * 1024 }).toString('utf8')); } catch { return bad; }
+  const c = transfer.cleanList('lists', [{ id: 'x', name: data && data.name, items: data && data.items }]).items[0];
+  return c && c.items.length ? { ok: true, list: { name: c.name, items: c.items, createdAt: c.createdAt } } : { ok: false, error: 'That list is empty or damaged.' };
+});
 
 // what there is here to export (for the "what to include" ticks)
 ipcMain.handle('transfer:info', async () => {
@@ -776,6 +840,82 @@ ipcMain.handle('transfer:undo', async () => {
   }
 });
 
+// ---- Sync between computers through a shared folder (the rules live in sync.js) ----
+const { createSync } = require('./sync');
+const { createDrive, FILE_NAME: SYNC_FILE_NAME } = require('./drive');
+const drive = createDrive({ userDataDir, safeStorage, openExternal: (u) => shell.openExternal(u), request: (url, options, what) => miscFetch(url, options, what), log: console });
+const SYNC_FILES_OF = { settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], personal: ['personal'], notifications: ['notifications'], following: ['following', 'followNotifications'] };
+const writeJson = (file, data) => fs.writeFileSync(file, JSON.stringify(data));
+const syncer = createSync({
+  userDataDir,
+  io: {
+    source: gatherTransferSources,
+    mtime: (id) => Math.max(0, ...(SYNC_FILES_OF[id] || []).map(k => { try { return fs.statSync(TRANSFER_FILES[k]()).mtimeMs; } catch { return 0; } })),
+    apply: (id, payload) => {
+      if (id === 'settings') writeJson(settingsPath(), { ...loadSettings(), ...payload });
+      else if (id === 'following') { writeJson(TRANSFER_FILES.following(), payload.following); writeJson(TRANSFER_FILES.followNotifications(), payload.notices); }
+      else writeJson(TRANSFER_FILES[id](), payload);
+    },
+  },
+  log: console,
+});
+// A sync with a Google Drive folder: fetch the sync file first, sync as usual, then upload it again if it changed.
+async function safeSync(mode) {
+  try {
+    if (!drive.active()) return syncer.syncNow(mode);
+    try { await drive.pull(); } catch (err) { return { ok: false, error: `Google Drive: ${err.message}` }; }
+    const res = syncer.syncNow(mode);
+    if (res.ok) { try { await drive.push(); } catch (err) { return { ok: false, error: `Google Drive: the changes couldn’t be uploaded (${err.message}).` }; } }
+    return res;
+  } catch (err) { return { ok: false, error: `Sync failed: ${err.message}` }; }
+}
+const withDrive = (st) => {
+  const d = drive.info();
+  if (!d.folder) return { ...st, drive: d };
+  return { ...st, drive: d, provider: 'Google Drive', folderOk: true, displayFolder: `Google Drive › ${d.folder.name}${d.account ? ` (${d.account})` : ''}`, file: `${d.folder.name} › ${SYNC_FILE_NAME}` };
+};
+ipcMain.handle('sync:status', async () => withDrive(syncer.status()));
+// ---- Google Drive (the rules live in drive.js) ----
+const driveErr = (err) => ({ error: (err && err.message) || 'Something went wrong.' });
+ipcMain.handle('drive:info', async () => drive.info());
+ipcMain.handle('drive:setClient', async (_e, id, secret) => { drive.setClient(id, secret); return drive.info(); });
+ipcMain.handle('drive:signIn', async () => { try { return await drive.signIn(); } catch (err) { return driveErr(err); } });
+ipcMain.handle('drive:cancelSignIn', async () => { drive.cancelSignIn(); return true; });
+ipcMain.handle('drive:signOut', async () => { try { const r = await drive.signOut(); return r; } catch (err) { return driveErr(err); } });
+ipcMain.handle('drive:listFolders', async () => { try { return { folders: await drive.listFolders() }; } catch (err) { return driveErr(err); } });
+ipcMain.handle('drive:inspect', async (_e, folderId) => { try { return await drive.inspect(folderId); } catch (err) { return driveErr(err); } });
+ipcMain.handle('drive:connect', async (_e, opts) => {
+  try {
+    const mode = ['use', 'overwrite', 'create'].includes(opts && opts.mode) ? opts.mode : null;
+    if (!mode) return { error: 'Choose what to do with the folder.' };
+    await drive.connect({ folderId: opts.folderId, name: opts.name, mode });
+    syncer.setFolder(drive.cacheDir()); syncer.reset(); syncer.setEnabled(true);
+    return withDrive(syncer.status());
+  } catch (err) { return driveErr(err); }
+});
+ipcMain.handle('sync:preview', async () => { if (drive.active()) { try { await drive.pull(); } catch (err) { return { ok: false, error: err.message }; } } return syncer.preview(); });
+ipcMain.handle('sync:setDevice', async (_e, name) => syncer.setDevice(name));
+ipcMain.handle('sync:setEnabled', async (_e, on) => syncer.setEnabled(!!on));
+ipcMain.handle('sync:setParts', async (_e, parts) => syncer.setParts(parts));
+ipcMain.handle('sync:disconnect', async () => { drive.disconnect(); return withDrive(syncer.disconnect()); });
+// choice: 'save' = this app's data replaces the folder's; 'load' = the folder's data replaces this app's
+ipcMain.handle('sync:now', async (_e, choice) => {
+  const res = await safeSync(choice === 'save' ? 'save' : choice === 'load' ? 'load' : 'full');
+  if (res.ok && (res.pulled.length || res.merged.length)) res.reload = true; // something here changed: the page reloads to use it
+  return res;
+});
+let lastWaiting = '';
+async function backgroundSync() {
+  const st = syncer.status();
+  if (!st.enabled || !st.folder) return;
+  const res = await safeSync('push'); // only sends this computer's changes; anything to bring here waits for the person
+  const key = res.ok ? res.waiting.join(',') : '';
+  if (res.ok && res.waiting.length && key !== lastWaiting && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sync:waiting', res.waiting);
+  lastWaiting = key;
+}
+let syncTimer = null;
+function startSyncTimer() { clearInterval(syncTimer); syncTimer = setInterval(backgroundSync, 5 * 60 * 1000); }
+
 ipcMain.handle('settings:get', async () => loadSettings());
 ipcMain.handle('settings:set', async (_e, patch) => saveSettings(patch && typeof patch === 'object' ? patch : {}));
 
@@ -805,7 +945,7 @@ ipcMain.handle('api:getCachedLevels', async (_e, mode) => {
 
 ipcMain.handle('api:getChangelog', async (_e, page, mode) => apiFetch(ENDPOINTS.changelog(page || 1, mode)));
 
-ipcMain.handle('api:getLeaderboard', async (_e, page, mode) => apiFetch(ENDPOINTS.leaderboard(page || 1, mode)));
+ipcMain.handle('api:getLeaderboard', async (_e, page, mode, per) => apiFetch(ENDPOINTS.leaderboard(page || 1, mode, [50, 100].includes(Number(per)) ? Number(per) : 50)));
 ipcMain.handle('api:getCountries', async (_e, page, mode) => apiFetch(ENDPOINTS.countries(page || 1, mode)));
 ipcMain.handle('api:getCountry', async (_e, id, mode) => apiFetch(ENDPOINTS.country(id, mode)));
 
@@ -892,7 +1032,7 @@ ipcMain.handle('favourites:get', async () => {
 ipcMain.handle('favourites:set', async (_e, list) => {
   const clean = (Array.isArray(list) ? list : [])
     .filter(f => f && f.level_id != null)
-    .map(f => ({ level_id: f.level_id, name: String(f.name || ''), label: String(f.label || 'favourited').slice(0, 24) }));
+    .map(f => ({ level_id: f.level_id, name: String(f.name || ''), label: String(f.label || 'favourited').slice(0, 24), mode: f.mode === 'platformer' ? 'platformer' : 'classic' }));
   fs.writeFileSync(favouritesPath(), JSON.stringify(clean));
   return clean;
 });
@@ -1015,6 +1155,8 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(process.platform === 'darwin'
     ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
     : null);
+  if (syncer.status().enabled) await Promise.race([safeSync('full'), new Promise(r => setTimeout(r, 7000))]); // pull what the other computer changed BEFORE the window reads any data (but never wait long for the network)
+  startSyncTimer();
   await startLocalServer();
   createWindow();
   if (process.platform !== 'darwin') createTray(); // on a Mac the Dock icon does that job: closing the window keeps the app running, clicking the Dock icon brings it back
@@ -1040,8 +1182,16 @@ app.on('window-all-closed', () => {
   // the window closed. Quit explicitly via the tray menu.
 });
 
-app.on('before-quit', () => {
+let quitSynced = false;
+app.on('before-quit', (e) => {
   app.isQuiting = true;
   stopPolling();
   if (macUpdater) macUpdater.onQuit(); // an update you chose "Later" for goes in as the app quits
+  try {
+    if (syncer.status().enabled && !quitSynced) {
+      quitSynced = true;
+      if (drive.active()) { e.preventDefault(); Promise.race([safeSync('push'), new Promise(r => setTimeout(r, 8000))]).catch(() => {}).finally(() => app.quit()); } // the upload needs a moment: quit once it is done
+      else syncer.syncNow('push');
+    }
+  } catch { /* quitting anyway */ }
 });

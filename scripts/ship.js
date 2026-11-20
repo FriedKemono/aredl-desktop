@@ -50,6 +50,22 @@ try {
     process.exit(1);
   }
 
+  // Local commits that were never pushed (for example one that GitHub blocked because it held a secret) are folded
+  // into this release's commit. The blocked commit then no longer exists, so only the current files are pushed.
+  try {
+    const ahead = Number(out('git rev-list --count @{u}..HEAD')), behind = Number(out('git rev-list --count HEAD..@{u}'));
+    if (ahead > 0 && behind === 0) { console.log(`Folding ${ahead} unpushed commit(s) into this release...`); run('git reset --soft @{u}'); }
+  } catch { /* nothing to fold */ }
+
+  // OAuth secrets must never be committed: GitHub rejects the push. They belong in drive-config.local.js (git-ignored).
+  try {
+    const cfg = fs.readFileSync(path.join(root, 'drive-config.js'), 'utf8');
+    if (/clientSecret\s*:\s*['"][^'"]+['"]/.test(cfg) || /clientId\s*:\s*['"][^'"]+['"]/.test(cfg)) {
+      console.error('drive-config.js contains a Google client ID / secret, which GitHub blocks.\nMove both values into drive-config.local.js (git-ignored), leave drive-config.js empty, then run this again.');
+      process.exit(1);
+    }
+  } catch { /* no drive-config.js */ }
+
   run('git add .');
   try { run(`git commit -m "Version ${version}"`); } catch { console.log('(nothing new to commit - continuing)'); }
   run('git push');

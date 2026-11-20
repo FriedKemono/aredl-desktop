@@ -17,7 +17,7 @@
   function releaseHtml(r) {
     const items = r.items.map(([type, text]) =>
       `<li><span class="wn-tag wn-${escapeHtml(type)}">${escapeHtml(TYPE_LABEL[type] || type)}</span><span>${escapeHtml(text)}</span></li>`).join('');
-    return `<section class="wn-release"><h4>Version ${escapeHtml(r.version)}${r.title ? ` <small>${escapeHtml(r.title)}</small>` : ''}</h4><ul class="wn-list">${items}</ul></section>`;
+    return `<section class="wn-release"><h4>Version ${escapeHtml(r.version)}${r.date ? ` <small class="wn-date">${escapeHtml(new Date(r.date + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }))}</small>` : ''}${r.title ? ` <small>${escapeHtml(r.title)}</small>` : ''}</h4><ul class="wn-list">${items}</ul></section>`;
   }
 
   function setOpen(open) {

@@ -112,6 +112,12 @@
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10 10 3h5a2 2 0 0 1 2 2v5l-7 7a1.4 1.4 0 0 1-2 0L3 12a1.4 1.4 0 0 1 0-2Z" stroke-linejoin="round"/><circle cx="13.3" cy="6.7" r="1"/></svg>
             <span id="tagFilterCount" class="badge" hidden>0</span>
           </button>
+          <button class="btn btn-ghost icon-btn" id="savedFiltersBtn" title="Saved filters">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M5.5 3h9a1 1 0 0 1 1 1v13l-5.5-3.6L4.5 17V4a1 1 0 0 1 1-1Z"/></svg>
+          </button>
+          <button class="btn btn-ghost icon-btn" id="pickBtn" title="Pick a random level that matches filters">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="3.5" width="13" height="13" rx="3"/><circle cx="7.5" cy="7.5" r="1" fill="currentColor"/><circle cx="12.5" cy="12.5" r="1" fill="currentColor"/><circle cx="12.5" cy="7.5" r="1" fill="currentColor"/><circle cx="7.5" cy="12.5" r="1" fill="currentColor"/></svg>
+          </button>
           <select id="statusFilter"></select>
           <select id="sortBy">
             <option value="position">Sort: Position</option>
@@ -133,6 +139,11 @@
             <button class="linklike" id="tagFilterClear">Clear all</button>
           </div>
           <div id="tagFilterPills" class="tag-filter-pills"></div>
+          <div class="edel-filter">
+            <span class="dim" style="margin:0;">EDEL enjoyment</span>
+            <label>from <input type="number" id="edelMin" min="0" max="100" step="1" placeholder="0"></label>
+            <label>to <input type="number" id="edelMax" min="0" max="100" step="1" placeholder="100"></label>
+          </div>
         </div>
         </div></div>
         <div class="meta-row">
@@ -182,6 +193,7 @@
         </div>
         <p class="dim" style="margin:0;">Right-click a level in the Demon List to favourite it. Click a level here to open it in the list.</p>
       </div>
+      <div class="fx-listbar" id="favListBar"></div>
       <div id="favList" class="fav-list"></div>
     </section>
 
@@ -201,11 +213,20 @@
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="10" height="11" rx="2"/><path d="M4 13V5a2 2 0 0 1 2-2h7"/></svg>
               <span>Copy as CSV</span>
             </button>
+            <button class="refresh-btn" id="plStatsBtn" title="Charts and a yearly recap of your list">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 16V9M9 16V4M14 16v-5M3 16.5h14"/></svg>
+              <span>Stats</span>
+            </button>
+            <button class="refresh-btn" id="plWhatIfBtn" title="Points and rank after beating chosen levels">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14l4.5-4.5 3 3L17 6"/><path d="M12 6h5v5"/></svg>
+              <span>What if…</span>
+            </button>
             <button class="btn" id="plAddBtn">+ Add level</button>
           </div>
         </div>
         <p class="dim" style="margin:0;">Your own hardest-levels list: attempts, physics, version, clears, date and video for each level you've beaten, plus your runs (like 53-79 or 20-100). Use the pencil on a row to edit it.</p>
       </div>
+      <div id="plStats" class="fx-stats" hidden></div>
       <div class="pl-scroll"><div class="pl-table" id="plTable"></div></div>
       <div id="plProgressWrap" hidden>
         <div class="pl-section-bar">
@@ -244,6 +265,10 @@
           <h2>Leaderboard <span class="dim-count" id="lbCount"></span></h2>
           <div class="title-actions">
             <div class="search-wrap lb-search"><input id="lbSearch" type="text" placeholder="Search this page" autocomplete="off"></div>
+            <button class="refresh-btn" id="lbWhatIfBtn" title="Points and rank after beating chosen levels">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14l4.5-4.5 3 3L17 6"/><path d="M12 6h5v5"/></svg>
+              <span>What if…</span>
+            </button>
             <button class="refresh-btn" id="lbRefreshBtn" title="Reload this page of the leaderboard">
               <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
               <span>Refresh</span>
@@ -569,6 +594,19 @@
         </div>
       </div>
 
+      <div class="settings-card" id="paletteCard">
+        <h3>Command palette</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Open with</strong><small>The key that opens the command palette (search for levels, players, settings, lists, notifications and more). A plain key works whenever a text box is not focused; add Ctrl / Cmd, Alt or Shift for a shortcut that works anywhere.</small></div>
+            <div class="keybind-row">
+              <button class="keybind-btn" id="paletteKeyBtn" type="button" aria-label="Change the command palette key"><kbd id="paletteKeyText">`</kbd></button>
+              <button class="btn btn-ghost small-btn" id="paletteKeyReset" type="button">Reset</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <h3 class="settings-section">Backup</h3>
       <div class="settings-card wide">
         <h3>Export &amp; import</h3>
@@ -608,16 +646,78 @@
         </div>
       </div>
 
+      <h3 class="settings-section">Sync &amp; songs</h3>
+      <div class="settings-card wide">
+        <h3>Sync between computers</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>This computer</strong><small>Each computer has a name, so the folder can show which one saved what. Use something recognisable, like “Home PC” or “Laptop”.</small></div>
+            <div class="sync-device">
+              <input type="text" id="syncDevice" maxlength="40" spellcheck="false" autocomplete="off" aria-label="Name of this computer">
+              <button class="btn btn-ghost small-btn" id="syncDeviceSave" type="button" hidden>Save name</button>
+            </div>
+          </div>
+          <div class="setting-line" id="syncDriveLine">
+            <div class="setting-label"><strong>Google Drive account</strong><small>Sign in with a Google account, then create a new folder in its Drive or pick one that already exists. An existing folder is checked to make sure it holds an AREDL save before it is used, and you choose whether to use that save or overwrite it. The app only reads and writes its own sync file; it lists folders so one can be chosen.</small></div>
+            <div class="transfer-export" id="driveBox"></div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Sync now</strong><small>Choose between saving this app’s data to the Google Drive folder, or using the folder’s save to overwrite this app’s data. The previous copy is kept in the sync-backups folder.</small></div>
+            <div class="transfer-btns"><button class="btn small-btn" id="syncNowBtn">Sync now</button></div>
+          </div>
+          <div class="setting-line" id="syncPlanLine" hidden>
+            <div class="sync-plan" id="syncPlan" aria-live="polite"></div>
+          </div>
+          <div class="setting-line" id="syncMoreLine" hidden>
+            <div class="setting-label"><strong>What to sync</strong><small>Settings that only exist on one system (like Windows’ window button colours) stay where they are.</small></div>
+            <div class="transfer-export">
+              <div class="transfer-checks" id="syncParts"></div>
+              <label class="checkbox-wrap"><input type="checkbox" id="syncAuto"> Keep in sync automatically</label>
+            </div>
+          </div>
+          <div class="setting-line" id="syncResultLine" hidden>
+            <div class="transfer-result" id="syncResult" role="status" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card wide">
+        <h3>Song names</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Show song names</strong><small>Show a level’s song name (and search it) wherever the app already knows it. Names are found when you open a level’s music button, or with the button below.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="showSongNames"> Show song names</label>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Look up the rest</strong><small id="songBulkInfo">Finds the names of all songs on the lists, about one per second so Newgrounds isn’t hammered. It runs in the background and you can stop it any time.</small></div>
+            <div class="transfer-btns">
+              <button class="btn btn-ghost small-btn" id="songBulkBtn">Look up all song names</button>
+              <button class="btn btn-ghost small-btn" id="songBulkStopBtn" hidden>Stop</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <h3 class="settings-section">Advanced</h3>
       <div class="settings-card">
         <h3>Developer</h3>
         <label class="checkbox-wrap"><input type="checkbox" id="showRawToggle"> Show raw API responses (the "Full API response" blocks)</label>
       </div>
       <div class="settings-card wide">
-        <h3>API request log</h3>
-        <p class="dim">Every request this app makes to api.aredl.net, most recent first, with what it was for. Kept in memory only for this session.</p>
+        <h3>Request log</h3>
+        <p class="dim">Every request this app makes, most recent first, with what it was for. The figures count both logs below together. Kept in memory only for this session.</p>
         <div id="apiRate" class="api-rate"></div>
-        <div id="apiLogList" class="api-log-list"></div>
+      </div>
+      <div class="api-logs">
+        <div class="settings-card">
+          <h3>AREDL API</h3>
+          <p class="dim">Requests to api.aredl.net: <span id="apiLogCount">0 this session</span>.</p>
+          <div id="apiLogList" class="api-log-list"></div>
+        </div>
+        <div class="settings-card">
+          <h3>Other requests</h3>
+          <p class="dim">Anything else the app contacts, such as song name lookups: <span id="miscLogCount">0 this session</span>.</p>
+          <div id="miscLogList" class="api-log-list"></div>
+        </div>
       </div>
 
       <h3 class="settings-section">About</h3>
@@ -757,6 +857,7 @@
 <script src="countries.js"></script>
 <script src="releases.js"></script>
 <script src="app.js"></script>
+  <script src="features.js"></script>
 <script src="tour.js"></script>
 <script src="whatsnew.js"></script>
 </body>

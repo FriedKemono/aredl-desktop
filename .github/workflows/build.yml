@@ -17,6 +17,13 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      - name: Add the Google OAuth client from the repository secrets
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          node -e "require('fs').writeFileSync('drive-config.local.js','module.exports='+JSON.stringify({clientId:process.env.GOOGLE_CLIENT_ID||'',clientSecret:process.env.GOOGLE_CLIENT_SECRET||''}))"
       - run: npm run dist
       - uses: actions/upload-artifact@v4
         with:
@@ -36,6 +43,13 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      - name: Add the Google OAuth client from the repository secrets
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          node -e "require('fs').writeFileSync('drive-config.local.js','module.exports='+JSON.stringify({clientId:process.env.GOOGLE_CLIENT_ID||'',clientSecret:process.env.GOOGLE_CLIENT_SECRET||''}))"
       - run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,6 +64,13 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      - name: Add the Google OAuth client from the repository secrets
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          node -e "require('fs').writeFileSync('drive-config.local.js','module.exports='+JSON.stringify({clientId:process.env.GOOGLE_CLIENT_ID||'',clientSecret:process.env.GOOGLE_CLIENT_SECRET||''}))"
       - run: npm run dist:mac
       - uses: actions/upload-artifact@v4
         with:
@@ -72,6 +93,13 @@ jobs:
         with:
           node-version: 20
       - run: npm install
+      - name: Add the Google OAuth client from the repository secrets
+        shell: bash
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        run: |
+          node -e "require('fs').writeFileSync('drive-config.local.js','module.exports='+JSON.stringify({clientId:process.env.GOOGLE_CLIENT_ID||'',clientSecret:process.env.GOOGLE_CLIENT_SECRET||''}))"
       - run: npm run dist:mac
       - run: gh release upload "${{ github.ref_name }}" dist/*.dmg dist/*.zip --clobber
         env:

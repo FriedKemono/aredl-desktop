@@ -65,7 +65,9 @@ const SPEC = {
   plProgressSort:  { label: 'Progress sort',           check: oneOf('run', 'furthest', 'placement', 'tier', 'attempts', 'recent', 'name') },
   dateDp:          { label: 'Date precision',          check: int(0, 2) },
   showRaw:         { label: 'Raw API responses',       check: bool },
+  showSongNames:   { label: 'Show song names',         check: bool },
   toolsExpanded:   { label: 'Level buttons unfolded',  check: bool },
+  paletteKey:      { label: 'Command palette key',     check: (v) => (typeof v === 'string' && /^(?:(?:Mod|Alt|Shift)\+){0,3}\S{1,12}$/.test(v) ? v : undefined) }, // Mod = Ctrl on Windows, Cmd on a Mac
   // the top bar
   navTop:          { label: 'Tabs in the top bar',     check: bool,                     platforms: TOP_BAR_PLATFORMS, why: 'the top bar is only available on Windows and Mac' },
   navMenu:         { label: 'Top bar menu button',     check: bool,                     platforms: TOP_BAR_PLATFORMS, why: 'the top bar is only available on Windows and Mac' },
@@ -87,8 +89,10 @@ const label = (k) => (SPEC[k] ? SPEC[k].label : k);
 const SECTIONS = [
   { id: 'settings',      label: 'Settings',              noun: ['setting', 'settings'],       about: 'theme, backdrop, top bar, videos and so on' },
   { id: 'favourites',    label: 'Favourites',            noun: ['level', 'levels'],           about: 'your favourited levels' },
+  { id: 'lists',         label: 'Custom lists',          noun: ['list', 'lists'],             about: 'your own named lists of levels' },
   { id: 'following',     label: 'Followed levels',       noun: ['level', 'levels'],           about: 'the levels you follow, and the update notices they produced' },
   { id: 'personal',      label: 'Personal list',         noun: ['entry', 'entries'],          about: 'your own list of completed levels and runs' },
+  { id: 'filters',       label: 'Saved filters',         noun: ['filter', 'filters'],         about: 'your saved Demon List filters' },
   { id: 'notifications', label: 'Cleared notifications', noun: ['notification', 'notifications'], about: 'which notifications you have already cleared' },
 ];
 const SECTION_IDS = SECTIONS.map(x => x.id);
@@ -118,7 +122,28 @@ const boolMap = (v) => { const o = {}; if (isObj(v)) for (const k of Object.keys
 
 // each cleaner returns one tidy entry, or null when the entry can't be used
 const CLEAN = {
-  favourites: (f) => (isObj(f) && idOk(f.level_id) ? { level_id: f.level_id, name: str(f.name, 200), label: str(f.label || 'favourited', 24) } : null),
+  favourites: (f) => (isObj(f) && idOk(f.level_id) ? { level_id: f.level_id, name: str(f.name, 200), label: str(f.label || 'favourited', 24), mode: modeOf(f.mode) } : null),
+  lists: (l) => {
+    if (!isObj(l) || typeof l.id !== 'string' || !l.id || l.id.length > 60) return null;
+    const seen = new Set(), items = [];
+    for (const it of (Array.isArray(l.items) ? l.items : []).slice(0, 4000)) {
+      if (!isObj(it) || !idOk(it.level_id) || seen.has(String(it.level_id)) || items.length >= 2000) continue;
+      seen.add(String(it.level_id));
+      items.push({ level_id: it.level_id, name: str(it.name, 200), mode: modeOf(it.mode) });
+    }
+    return { id: l.id, name: str(l.name || 'List', 60).trim() || 'List', items, createdAt: isoOr(l.createdAt, new Date().toISOString()) };
+  },
+  filters: (f) => {
+    if (!isObj(f) || typeof f.id !== 'string' || !f.id || f.id.length > 60) return null;
+    const tags = {};
+    if (isObj(f.tags)) for (const k of Object.keys(f.tags).slice(0, 60)) if (!BAD_KEYS.has(k) && k.length <= 40 && (f.tags[k] === 'include' || f.tags[k] === 'exclude')) tags[k] = f.tags[k];
+    const num = (v) => (Number.isFinite(v) ? Math.min(100, Math.max(0, v)) : null);
+    return {
+      id: f.id, name: str(f.name || 'Filter', 60).trim() || 'Filter', mode: modeOf(f.mode), search: str(f.search, 200), status: str(f.status || '__all__', 60),
+      completedOnly: f.completedOnly === true, tags, edelMin: num(f.edelMin), edelMax: num(f.edelMax),
+      sort: ['position', 'points', 'name'].includes(f.sort) ? f.sort : 'position', createdAt: isoOr(f.createdAt, new Date().toISOString()),
+    };
+  },
   following: (f) => (isObj(f) && idOk(f.level_id)
     ? { ...cleanJson(f), level_id: f.level_id, name: str(f.name, 200), mode: modeOf(f.mode), notify: boolMap(f.notify), lastSeenAt: isoOr(f.lastSeenAt, new Date().toISOString()), lastChange: isoOr(f.lastChange, null) }
     : null),
@@ -135,12 +160,14 @@ const CLEAN = {
 };
 const KEY = {
   favourites: (f) => String(f.level_id),
+  lists: (l) => l.id,
+  filters: (f) => f.id,
   following: (f) => `${f.mode}:${f.level_id}`,
   followNotifications: (n) => n.id,
   personal: (e) => e.id,
   notifications: (id) => id,
 };
-const CAPS = { favourites: 5000, following: 2000, followNotifications: 300, personal: 5000, notifications: 2000 };
+const CAPS = { favourites: 5000, lists: 200, filters: 200, following: 2000, followNotifications: 300, personal: 5000, notifications: 2000 };
 
 // cleans a whole list: { items, dropped }
 function cleanList(kind, raw) {
@@ -167,7 +194,7 @@ function countSources(src) {
   for (const k of KEYS) if (src.settings && k in src.settings && SPEC[k].check(src.settings[k]) !== undefined) settingCount++;
   const n = (kind, list) => cleanList(kind, list).items.length;
   return {
-    settings: settingCount, favourites: n('favourites', src.favourites), following: n('following', src.following),
+    settings: settingCount, favourites: n('favourites', src.favourites), lists: n('lists', src.customLists), filters: n('filters', src.savedFilters), following: n('following', src.following),
     followNotices: n('followNotifications', src.followNotifications), personal: n('personal', src.personal), notifications: n('notifications', src.clearedNotifications),
   };
 }
@@ -184,6 +211,8 @@ function buildExport(src, { platform, appVersion, sections = SECTION_IDS }) {
     }
   }
   if (want.has('favourites')) doc.data.favourites = cleanList('favourites', src.favourites).items;
+  if (want.has('lists')) doc.data.lists = cleanList('lists', src.customLists).items;
+  if (want.has('filters')) doc.data.filters = cleanList('filters', src.savedFilters).items;
   if (want.has('following')) {
     doc.data.following = cleanList('following', src.following).items;
     doc.data.followNotifications = cleanList('followNotifications', src.followNotifications).items;
@@ -253,6 +282,10 @@ function planImport(doc, { platform }) {
   if (fav.items.length) sections.favourites = { available: true, count: fav.items.length, dropped: fav.dropped, items: fav.items };
   const fol = cleanList('following', data.following), folN = cleanList('followNotifications', data.followNotifications);
   if (fol.items.length || folN.items.length) sections.following = { available: true, count: fol.items.length, notices: folN.items.length, dropped: fol.dropped + folN.dropped, items: fol.items, noticeItems: folN.items };
+  const lst = cleanList('lists', data.lists);
+  if (lst.items.length) sections.lists = { available: true, count: lst.items.length, dropped: lst.dropped, items: lst.items };
+  const flt = cleanList('filters', data.filters);
+  if (flt.items.length) sections.filters = { available: true, count: flt.items.length, dropped: flt.dropped, items: flt.items };
   const per = cleanList('personal', data.personal);
   if (per.items.length) sections.personal = { available: true, count: per.items.length, dropped: per.dropped, items: per.items };
   const not = cleanList('notifications', data.notifications);

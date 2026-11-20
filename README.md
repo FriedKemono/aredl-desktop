@@ -146,6 +146,16 @@ kind of value, inside its range), every list entry is cleaned and size-limited, 
 and counted. A setting that doesn't exist on the computer you import into (the Windows window-button colours on a Mac, the
 top bar on Linux) is skipped with a reason. **The account / API key is never part of an export.**
 
+## More features (1.1.1)
+
+* **Sync** (`sync.js`, Settings -> Sync & songs): one file, `AREDL-Desktop-sync.json`, in a folder both computers share. Per block
+  (settings, favourites, custom lists, saved filters, followed levels, personal list, cleared notifications) it compares this
+  computer, the file, and what matched last time: only-mine -> sent, only-the-file's -> brought here, both -> newer wins and the
+  other is kept in `sync-backups/`; the first sync combines lists. Pulls happen at start-up (before the window reads any data) and
+  on "Sync now"; the background timer and quitting only send. Never the API key; Windows-only settings stay put.
+* **Command palette** (` by default, changeable in Settings), **pick a level**, **points what-if**, **personal list stats**, **saved filters / EDEL range**,
+  **custom lists**, **song names** - all in `renderer/features.js`.
+
 ## Mac version
 
 A Mac app is built too. On a Mac, `npm install` then `npm run dist` builds it (`npm run dist` builds for whichever

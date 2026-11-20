@@ -108,6 +108,7 @@ function showTab(name) {
   else renderRecordsFooter();
   document.body.dataset.tab = name;
   if (name === 'settings' && window.refreshTransferChoices) window.refreshTransferChoices();
+  if (name === 'settings' && window.fx && fx.onSettingsShown) fx.onSettingsShown();
   pauseAllVideos(); // whatever was playing on the tab we're leaving is no longer visible
   try { [...docks].forEach(d => d.layout()); } catch { /* players not set up yet */ } // hide / move players now, not a frame later
   if (name === 'changelog' && !state.changelogLoaded) loadChangelog(true);
@@ -842,7 +843,7 @@ window.addEventListener('blur', () => navDragEnd(false));
     const q = norm(input.value), terms = q ? q.split(' ') : [];
     clear.hidden = !q;
     const match = (text) => { const t = norm(text); return terms.every(w => t.includes(w)); };
-    const cards = [...root.querySelectorAll(':scope > .settings-card')];
+    const cards = [...root.querySelectorAll(':scope > .settings-card, :scope > .api-logs > .settings-card')];
     const heads = [...root.querySelectorAll(':scope > .settings-section')];
     root.querySelectorAll('.search-hide').forEach(el => el.classList.remove('search-hide'));
     if (!terms.length) { none.hidden = true; return; }
@@ -865,7 +866,7 @@ window.addEventListener('blur', () => navDragEnd(false));
     // a section heading stays only while some card under it is still showing
     heads.forEach(hd => {
       let any = false;
-      for (let n = hd.nextElementSibling; n && !n.classList.contains('settings-section'); n = n.nextElementSibling) if (shown.has(n)) any = true;
+      for (let n = hd.nextElementSibling; n && !n.classList.contains('settings-section'); n = n.nextElementSibling) if (shown.has(n) || (n.classList.contains('api-logs') && [...n.children].some(c => shown.has(c)))) any = true;
       if (!any) hd.classList.add('search-hide');
     });
     none.hidden = shown.size > 0;
@@ -1260,13 +1261,13 @@ async function initSettings() {
   document.documentElement.classList.remove('booting');
 }
 
-// counts the clicks on any Refresh button; a song name is only looked up again if one of these happened since it was last looked up
+// goes up only when SONG info is refreshed on purpose (the Refresh popup in the Demon List); a song name is looked up
+// again only if this went up since it was last looked up. Refreshing level info never touches it.
 let refreshEpoch = 0;
 function wireRefreshButton(id, fn) {
   const btn = document.getElementById(id);
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    refreshEpoch++;
     btn.classList.add('spinning');
     try { await fn(); } finally { setTimeout(() => btn.classList.remove('spinning'), 500); }
   });
@@ -1417,7 +1418,8 @@ $('#signOutBtn').addEventListener('click', async () => {
 // ---------------------------------------------------------------------------
 // API request log
 // ---------------------------------------------------------------------------
-let apiLog = [];
+let apiLog = [];   // requests to api.aredl.net
+let miscLog = [];  // everything else the app contacts (song names...)
 
 // keep the requests/min figure moving while Settings is open
 setInterval(() => {
@@ -1451,37 +1453,60 @@ function describeRequest(url) {
   return `Loaded ${p || '/'}`;
 }
 
-function renderApiLog() {
-  const now = Date.now();
-  const ts = (e) => new Date(e.timestamp).getTime();
-  const lastMin = apiLog.filter(e => now - ts(e) <= 60000).length;
-  const last5 = apiLog.filter(e => now - ts(e) <= 300000).length;
-  const limited = apiLog.filter(e => e.status === 429).length;
-  const rate = document.getElementById('apiRate');
-  if (rate) rate.innerHTML = `<span class="rate-pill strong">${lastMin} requests/min</span>
-    <span class="rate-pill">${(last5 / 5).toFixed(1)}/min avg (5 min)</span>
-    <span class="rate-pill">${apiLog.length} this session</span>
-    ${limited ? `<span class="rate-pill warn">${limited} rate-limited (429)</span>` : ''}`;
-  const list = apiLog.slice().reverse();
-  $('#apiLogList').innerHTML = list.length
-    ? list.map(e => `<div class="api-log-row ${e.ok ? '' : 'err'}">
+// Plain-English reason for a request that isn't to the AREDL API (song lookups...).
+function describeMisc(e) {
+  if (e.what) return e.what;
+  try { return `Contacted ${new URL(e.url).hostname}`; } catch { return 'Request'; }
+}
+
+function logRowHtml(e, reason) {
+  return `<div class="api-log-row ${e.ok ? '' : 'err'}">
         <span class="api-log-time">${escapeHtml(new Date(e.timestamp).toLocaleTimeString())}</span>
         <span class="api-log-status">${escapeHtml(e.status ?? 'ERR')}</span>
         <span class="api-log-body">
-          <span class="api-log-reason">${escapeHtml(describeRequest(e.url) || 'Request')}</span>
+          <span class="api-log-reason">${escapeHtml(reason)}</span>
           <span class="api-log-url">${escapeHtml(e.url)}</span>
         </span>
-      </div>`).join('')
+      </div>`;
+}
+const failedCount = (list) => list.filter(e => !e.ok).length;
+
+function renderApiLog() {
+  const now = Date.now();
+  const ts = (e) => new Date(e.timestamp).getTime();
+  const all = apiLog.concat(miscLog); // the three figures on the top card count both logs together
+  const lastMin = all.filter(e => now - ts(e) <= 60000).length;
+  const last5 = all.filter(e => now - ts(e) <= 300000).length;
+  const limited = all.filter(e => e.status === 429).length;
+  const rate = document.getElementById('apiRate');
+  if (rate) rate.innerHTML = `<span class="rate-pill strong">${lastMin} requests/min</span>
+    <span class="rate-pill">${(last5 / 5).toFixed(1)}/min avg (5 min)</span>
+    <span class="rate-pill">${all.length} this session</span>
+    ${limited ? `<span class="rate-pill warn">${limited} rate-limited (429)</span>` : ''}`;
+  const sum = (list) => `${list.length} this session${failedCount(list) ? ` · ${failedCount(list)} failed` : ''}`;
+  const capA = document.getElementById('apiLogCount'), capM = document.getElementById('miscLogCount');
+  if (capA) capA.textContent = sum(apiLog);
+  if (capM) capM.textContent = sum(miscLog);
+  const list = apiLog.slice().reverse();
+  $('#apiLogList').innerHTML = list.length
+    ? list.map(e => logRowHtml(e, describeRequest(e.url) || 'Request')).join('')
     : '<div class="dim">No requests yet.</div>';
+  const mlist = miscLog.slice().reverse();
+  $('#miscLogList').innerHTML = mlist.length
+    ? mlist.map(e => logRowHtml(e, describeMisc(e))).join('')
+    : '<div class="dim">Nothing yet. Song name lookups show up here.</div>';
 }
 
 async function loadApiLog() {
-  apiLog = await window.aredl.getRequestLog();
+  const all = await window.aredl.getRequestLog();
+  apiLog = all.filter(e => e.kind !== 'misc');
+  miscLog = all.filter(e => e.kind === 'misc');
   renderApiLog();
 }
 window.aredl.onNewRequestLog((entry) => {
-  apiLog.push(entry);
-  if (apiLog.length > 500) apiLog.shift();
+  const target = entry.kind === 'misc' ? miscLog : apiLog;
+  target.push(entry);
+  if (target.length > 500) target.shift();
   renderApiLog();
 });
 
@@ -1549,7 +1574,7 @@ async function switchListMode(mode) {
   state.selectedId = null; state.detailLoaded = null; state.multiShownId = null; state.multiViewId = null;
   state.multi.clear();
   multiRecordsCache.clear(); multiHistoryCache.clear();
-  state.tagFilters = {}; updateTagFilterCount();
+  state.tagFilters = {}; state.edelMin = state.edelMax = null; if (window.fx) fx.syncEdelInputs(); updateTagFilterCount();
   $('#recordsCol').hidden = true;
   $('#detailInner').innerHTML = '<div class="detail-placeholder">Select a level on the left to see its details.</div>';
   markRangeCards();
@@ -1614,7 +1639,7 @@ function levelFilterOk(l, f) {
   if (!v) return true;
   switch (f.key) {
     case 'id': return String(l.level_id ?? '').includes(v);
-    case 'song': return l.song != null && String(l.song).includes(v);
+    case 'song': return l.song != null && (/^\d+$/.test(v) ? String(l.song).includes(v) : songLabelOf(l.song).toLowerCase().includes(v)); // a number = song ID; words = the song's name / artist (if known)
     case 'tag': return (l.tags || []).some(t => String(t).toLowerCase().includes(v));
     case 'status': {
       const st = String(l.status || '').toLowerCase();
@@ -1634,10 +1659,79 @@ function levelFilterOk(l, f) {
     default: return true;
   }
 }
+// Song names the app already knows (looked up from the song menu, or in bulk from Settings): id -> { name, artist }
+const songNames = new Map();
+let songVersion = 0; // goes up whenever a song becomes known, so cached search text is rebuilt
+// The game's own songs (https://boomlings.dev/reference/songs), by Server ID. A level that uses one has a NEGATIVE song id:
+// -1 is the first official song (Server ID 0), -2 the next one, and so on. Change OFFICIAL_SONG_OFFSET if the numbering ever differs.
+const OFFICIAL_SONGS = new Map([
+  [-1, 'Practice: Stay Inside Me', 'OcularNebula'],
+  [0, 'Stereo Madness', 'Foreverbound'],
+  [1, 'Back on Track', 'DJVI'],
+  [2, 'Polargeist', 'Step'],
+  [3, 'Dry Out', 'DJVI'],
+  [4, 'Base after Base', 'DJVI'],
+  [5, 'Cant Let Go', 'DJVI'],
+  [6, 'Jumper', 'Waterflame'],
+  [7, 'Time Machine', 'Waterflame'],
+  [8, 'Cycles', 'DJVI'],
+  [9, 'xStep', 'DJVI'],
+  [10, 'Clutterfunk', 'Waterflame'],
+  [11, 'Theory of Everything', 'DJ-Nate'],
+  [12, 'Electroman Adventures', 'Waterflame'],
+  [13, 'Clubstep', 'DJ-Nate'],
+  [14, 'Electrodynamix', 'DJ-Nate'],
+  [15, 'Hexagon Force', 'Waterflame'],
+  [16, 'Blast Processing', 'Waterflame'],
+  [17, 'Theory of Everything 2', 'DJ-Nate'],
+  [18, 'Geometrical Dominator', 'Waterflame'],
+  [19, 'Deadlocked', 'F-777'],
+  [20, 'Fingerdash', 'MDK'],
+  [21, 'Dash', 'MDK'],
+  [22, 'Explorers', 'Hinkik'],
+  [23, 'The Seven Seas', 'F-777'],
+  [24, 'Viking Arena', 'F-777'],
+  [25, 'Airborne Robots', 'F-777'],
+  [26, 'Secret', 'RobTop'],
+  [27, 'Payload', 'Dex Arson'],
+  [28, 'Beast Mode', 'Dex Arson'],
+  [29, 'Machina', 'Dex Arson'],
+  [30, 'Years', 'Dex Arson'],
+  [31, 'Frontlines', 'Dex Arson'],
+  [32, 'Space Pirates', 'Waterflame'],
+  [33, 'Striker', 'Waterflame'],
+  [34, 'Embers', 'Dex Arson'],
+  [35, 'Round 1', 'Dex Arson'],
+  [36, 'Monster Dance Off', 'F-777'],
+  [37, 'Press Start', 'MDK'],
+  [38, 'Nock Em', 'Bossfight'],
+  [39, 'Power Trip', 'Boom Kitty'],
+].map(([i, name, artist]) => [i, [name, artist]]));
+const OFFICIAL_SONG_OFFSET = 1;
+function officialSong(id) {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n >= 0) return null;
+  const s = OFFICIAL_SONGS.get(-n - OFFICIAL_SONG_OFFSET);
+  return s ? { name: s[0], artist: s[1] } : null;
+}
+function rememberSong(id, info) { if (info && info.name) { songNames.set(String(id), { name: info.name, artist: info.artist || '' }); songVersion++; queueSongStats(); } }
+// the Song box in a level's details follows along when a name becomes known (no need to leave the tab and come back)
+let songStatsQueued = false;
+function refreshSongStats() {
+  document.querySelectorAll('[data-song-stat]').forEach(el => { el.innerHTML = songHtmlFor({ song: Number(el.dataset.songStat) }); });
+}
+function queueSongStats() { if (songStatsQueued) return; songStatsQueued = true; requestAnimationFrame(() => { songStatsQueued = false; refreshSongStats(); }); }
+function songLabelOf(id) {
+  if (id == null || appSettings.showSongNames === false) return '';
+  if (Number(id) < 0) { const o = officialSong(id); return o ? `${o.name} – ${o.artist}` : ''; }
+  const s = songNames.get(String(id));
+  return s ? (s.artist ? `${s.name} – ${s.artist}` : s.name) : '';
+}
+const songLineHtml = (level) => { const t = level && level.song > 0 ? songLabelOf(level.song) : ''; return t ? `<div class="fav-card-song" title="Song">♪ ${escapeHtml(t)}</div>` : ''; };
 const levelTextCache = new WeakMap(); // level -> { hay, name } (lowercase), built once instead of on every keystroke
 function levelText(l) {
   let t = levelTextCache.get(l);
-  if (!t) { t = { hay: (l.name + ' ' + (l.tags || []).join(' ') + ' ' + (l.description || '')).toLowerCase(), name: String(l.name).toLowerCase() }; levelTextCache.set(l, t); }
+  if (!t || t.sv !== songVersion) { t = { sv: songVersion, hay: (l.name + ' ' + (l.tags || []).join(' ') + ' ' + (l.description || '') + ' ' + (l.song > 0 ? songLabelOf(l.song) : '')).toLowerCase(), name: String(l.name).toLowerCase() }; levelTextCache.set(l, t); }
   return t;
 }
 const NAME_COLLATOR = new Intl.Collator(); // same ordering as localeCompare, without re-creating a collator for every comparison
@@ -1663,6 +1757,10 @@ function applyFilters() {
       const tagsLower = (l.tags || []).map(t => String(t).toLowerCase());
       if (includeTags.some(t => !tagsLower.includes(t))) return false;
       if (excludeTags.some(t => tagsLower.includes(t))) return false;
+    }
+    if (state.edelMin != null || state.edelMax != null) { // EDEL enjoyment range (levels without a rating don't pass)
+      const e = l.edel_enjoyment;
+      if (e == null || (state.edelMin != null && e < state.edelMin) || (state.edelMax != null && e > state.edelMax)) return false;
     }
     if (!terms.length) return true;
     const text = levelText(l);
@@ -1742,7 +1840,7 @@ function renderTagFilterPanel() {
 renderTagFilterPanel();
 
 function updateTagFilterCount() {
-  const n = Object.keys(state.tagFilters).length;
+  const n = Object.keys(state.tagFilters).length + (state.edelMin != null || state.edelMax != null ? 1 : 0);
   const badge = $('#tagFilterCount');
   badge.hidden = n === 0;
   badge.textContent = n;
@@ -1752,6 +1850,7 @@ $('#tagFilterBtn').addEventListener('click', () => $('#tagFilterCollapse').class
 
 $('#tagFilterClear').addEventListener('click', () => {
   state.tagFilters = {};
+  state.edelMin = state.edelMax = null; if (window.fx) fx.syncEdelInputs();
   renderTagFilterPanel();
   updateTagFilterCount();
   applyFilters();
@@ -2034,10 +2133,15 @@ function renderFavourites() {
   const el = document.getElementById('favList');
   if (!el) return;
   const mode = tabModes.favourites; // all | classic | platformer
-  const mine = state.favourites.filter(f => mode === 'all' || (f.mode || 'classic') === mode);
+  const customList = window.fx ? fx.activeList() : null; // one of your own lists is being shown instead of the favourites
+  const source = customList ? customList.items.map(i => ({ level_id: i.level_id, name: i.name, mode: i.mode, label: 'favourited' })) : state.favourites;
+  const mine = source.filter(f => mode === 'all' || (f.mode || 'classic') === mode);
   $('#favCount').textContent = mine.length ? `(${mine.length})` : '';
+  if (window.fx) fx.renderListBar();
   if (!mine.length) {
-    el.innerHTML = `<div class="state">No ${mode === 'platformer' ? 'platformer ' : mode === 'classic' ? 'classic ' : ''}favourites yet.</div>`;
+    el.innerHTML = customList
+      ? `<div class="state">${source.length ? 'None of the levels in this list are in that list.' : 'This list is empty. Right-click a level and choose “Add to a list…”.'}</div>`
+      : `<div class="state">No ${mode === 'platformer' ? 'platformer ' : mode === 'classic' ? 'classic ' : ''}favourites yet.</div>`;
     return;
   }
   const rows = mine.map(f => {
@@ -2065,17 +2169,17 @@ function renderFavourites() {
     const lab = favLabelOf(r.label);
     if (mode === 'all' && r.mode === 'platformer') pills.push(`<span class="fav-pill status">Platformer</span>`); // (the All view mixes both lists)
     if (r.status) pills.push(`<span class="fav-pill status">${escapeHtml(r.status)}</span>`);
-    pills.push(completed
-      ? `<span class="fav-pill done">✓ Completed</span>`
-      : `<button class="fav-pill fav-label" data-fav-label="${escapeHtml(r.level_id)}" style="--c:${lab.color}" title="Change what this favourite is for"><i class="dot"></i>${escapeHtml(lab.name)}<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l5 5 5-5"/></svg></button>`);
+    if (completed) pills.push(`<span class="fav-pill done">✓ Completed</span>`);
+    else if (!customList) pills.push(`<button class="fav-pill fav-label" data-fav-label="${escapeHtml(r.level_id)}" style="--c:${lab.color}" title="Change what this favourite is for"><i class="dot"></i>${escapeHtml(lab.name)}<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l5 5 5-5"/></svg></button>`);
     if (l && l.points != null) pills.push(`<span class="fav-pill stat pts" title="Points"><b>${escapeHtml(formatPoints(l.points))}</b><small>pts</small></span>`);
     if (l && l.edel_enjoyment != null) pills.push(`<span class="fav-pill stat edel" title="EDEL enjoyment rating"><small>EDEL</small><b>${escapeHtml(enjText(l))}</b></span>`);
     const pubName = l && l.publisher_id != null ? publisherNames.get(String(l.publisher_id)) : null;
     return `<div class="fav-card${completed ? ' completed' : ''}" style="--c:${completed ? '#4ade80' : lab.color}" data-level-id="${escapeHtml(r.level_id)}" data-jump="${escapeHtml(r.level_id)}">
-      <button class="fav-remove" data-fav-remove="${escapeHtml(r.level_id)}" title="Remove from favourites" aria-label="Remove from favourites">${starSvg('fav-star')}</button>
+      <button class="fav-remove" data-fav-remove="${escapeHtml(r.level_id)}"${customList ? ` data-list-remove="${escapeHtml(r.level_id)}"` : ''} title="${customList ? 'Remove from this list' : 'Remove from favourites'}" aria-label="${customList ? 'Remove from this list' : 'Remove from favourites'}">${customList ? '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9"/></svg>' : starSvg('fav-star')}</button>
       <div class="fav-card-rank${hasPos ? '' : ' status'}">${escapeHtml(hasPos ? `#${r.position}` : (r.status || '—'))}</div>
       <div class="fav-card-name">${escapeHtml(r.name)}</div>
       ${pubName ? `<div class="fav-card-by">by ${escapeHtml(pubName)}</div>` : ''}
+      ${songLineHtml(l)}
       ${pills.length ? `<div class="fav-pills">${pills.join('')}</div>` : ''}
       <div class="fav-card-foot">
         <span class="fav-card-id copyable" data-copy="${escapeHtml(r.level_id)}" data-copy-label="Level ID" title="Click to copy">ID ${escapeHtml(r.level_id)}</span>
@@ -2085,7 +2189,7 @@ function renderFavourites() {
   };
 
   // Sorting by list or category groups the cards under coloured headers.
-  const sortMode = appSettings.favSort || 'category';
+  const sortMode = customList ? 'position' : (appSettings.favSort || 'category');
   const isDone = (r) => modeStore[r.mode].completedIds.has(String(r.level_id));
   const groupBy = (keyOf, nameOf, colorOf, order) => {
     const by = new Map();
@@ -2550,7 +2654,7 @@ function plStatsHtml(done) {
   // columns, in grid order from "Tier" onwards: [values, formatter, whether a total makes sense].
   // Date, physics, version and days since have no statistics, so they are dashes.
   const cols = [
-    [nums(x => x.r.tier), n => n.toFixed(2), false],                                                  // tier
+    [nums(x => x.r.tier), n => fmtTier(n), false],                                                  // tier
     [nums(x => x.r.position), n => `Top ${Math.round(n)}`, false],                                     // AREDL placement
     [nums(x => x.r.pointsNum), n => n.toLocaleString(undefined, { maximumFractionDigits: 2 }), true],  // points
     [nums(x => x.e.attempts), n => Math.round(n).toLocaleString(), true],                              // attempts
@@ -2612,7 +2716,7 @@ function renderPersonal() {
       ${first}
       <span class="pl-name">${r.jumpId != null ? `<a href="#" class="level-link" data-jump="${escapeHtml(String(r.jumpId))}">${escapeHtml(r.name || '—')}</a>` : escapeHtml(r.name || '—')}</span>
       <span class="pl-cell">${e.difficulty ? `<span class="pl-diff" style="--c:${PL_DIFFS[e.difficulty] || '#555'}">${escapeHtml(e.difficulty)}</span>` : '—'}</span>
-      ${cell('Tier', r.tier != null ? r.tier.toFixed(2) : '', r.tier != null ? r.tier.toFixed(2) : '')}
+      ${cell('Tier', r.tier != null ? fmtTier(r.tier) : '', r.tier != null ? fmtTier(r.tier) : '')}
       ${cell('AREDL placement', escapeHtml(r.placement), r.placement)}
       ${cell('Points', escapeHtml(r.points), r.points)}
       ${cell('Attempts', e.attempts != null ? Number(e.attempts).toLocaleString() : '', e.attempts != null ? e.attempts : '')}
@@ -2810,7 +2914,7 @@ function plAutoValues(l) {
     name: l.name || '',
     id: l.level_id != null ? String(l.level_id) : '',
     placement: l.position != null ? `Top ${l.position}` : (l.status ? levelStatusLabel({ status: l.status, position: null }) : ''),
-    tier: l.gddl_tier != null ? Number(l.gddl_tier).toFixed(2) : '',
+    tier: l.gddl_tier != null ? fmtTier(l.gddl_tier) : '',
     points: l.points != null ? formatPoints(l.points) : '',
   };
 }
@@ -2954,7 +3058,7 @@ function plCsv() {
   const q = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
   const head = ['#', 'Level', 'Difficulty', 'Tier', 'AREDL Placement', 'Points', 'Attempts', 'Completions', 'Progress %', 'Date', 'Physics', 'Version', 'Days Since', 'ID', 'Video'];
   const line = (rank, { e, r }, completions, progress) => [
-    rank, r.name, e.difficulty, r.tier != null ? r.tier.toFixed(2) : '', r.placement, r.points, e.attempts ?? '',
+    rank, r.name, e.difficulty, r.tier != null ? fmtTier(r.tier) : '', r.placement, r.points, e.attempts ?? '',
     completions, progress, plFmtDate(e.date), plPhysicsOf(e), e.version, plDaysSince(e.date) ?? '', r.id, e.video,
   ].map(q).join(',');
   const lines = [head.join(',')];
@@ -3196,6 +3300,7 @@ function levelMenuItems(level) {
     { separator: true },
     { label: fav ? 'Remove from favourites' : 'Add to favourites', onClick: () => toggleFavourite(level) },
     { label: isFollowing(level.level_id) ? 'Unfollow level' : 'Follow level', onClick: () => toggleFollow(level) },
+    { label: 'Add to a list…', onClick: () => window.fx && fx.openListsMenu(level) },
   ];
 }
 
@@ -3269,20 +3374,25 @@ let songMenuToken = 0;
 // the words to search for: name + artist, without the stray " - " that titles like "Artist - Song" carry
 const songSearchWords = (info) => [info.name, info.artist].filter(Boolean).join(' ').replace(/\s+[-–—|]+\s+/g, ' ').replace(/\s+/g, ' ').trim();
 const songNgUrl = (id) => `https://www.newgrounds.com/audio/listen/${id}`;
+let songMenuLevelId = null; // the level whose music button opened the menu (to count the OTHER levels that use the song)
 function songMenuItems(id, info, { retry } = {}) {
   const open = (url) => () => window.open(url, '_blank', 'noopener');
   const q = info ? encodeURIComponent(songSearchWords(info)) : '';
   const ng = { label: 'Open in Newgrounds', onClick: open(songNgUrl(id)) };
+  const others = window.fx ? fx.otherLevelsWithSong(id, songMenuLevelId) : 0;
+  const othersItem = others ? [{ label: `Other levels with this song (${others})`, onClick: () => fx.showSongLevels(id) }] : [];
   if (info === 'loading') return [
     { header: 'Looking up the song…', dim: true },
     { label: 'Search on YouTube', disabled: true, onClick() {} },
     { label: 'Search on Spotify', disabled: true, onClick() {} },
     ng,
+    ...othersItem,
   ];
   if (!info) return [
     { header: 'Couldn’t get the song name', sub: retry && retry.error ? retry.error : 'Check your connection and try again', dim: true },
     { label: 'Try again', onClick: retry.run },
     ng,
+    ...othersItem,
     { separator: true },
     { label: 'Copy song ID', onClick: () => copyText(id, 'Song ID') },
   ];
@@ -3292,6 +3402,7 @@ function songMenuItems(id, info, { retry } = {}) {
     { label: 'Search on YouTube', onClick: open(`https://www.youtube.com/results?search_query=${q}`) },
     { label: 'Search on Spotify', onClick: () => { window.aredl.openSpotifySearch(songSearchWords(info)).catch(() => {}); } }, // opens the Spotify app if it's installed, the website if not
     ng,
+    ...othersItem,
     { separator: true },
     { label: 'Copy song name', onClick: () => copyText(info.name, 'Song name') },
     { label: 'Copy song ID', onClick: () => copyText(id, 'Song ID') },
@@ -3301,6 +3412,7 @@ function songMenuItems(id, info, { retry } = {}) {
 // up again when a Refresh has happened since, or when you press "Try again".
 async function openSongMenu(btn, { force = false } = {}) {
   const id = btn.dataset.songMenu;
+  songMenuLevelId = btn.dataset.songLevel || null;
   const r = btn.getBoundingClientRect();
   const x = r.left, y = r.bottom + 6;
   const token = ++songMenuToken, owner = `song:${token}`;
@@ -3321,6 +3433,7 @@ async function openSongMenu(btn, { force = false } = {}) {
   songInfoCache.set(id, res && res.ok
     ? { info: { name: res.name, artist: res.artist }, epoch }
     : { info: null, error: res && res.error, epoch });
+  if (res && res.ok) rememberSong(id, { name: res.name, artist: res.artist }); // now known everywhere: cards, search
   if (!stillOpen()) return; // closed (or replaced) while it was loading
   const done = songInfoCache.get(id);
   show(songMenuItems(id, done.info, retry(done.error)), true);
@@ -3328,6 +3441,23 @@ async function openSongMenu(btn, { force = false } = {}) {
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-song-menu]');
   if (btn) { e.preventDefault(); openSongMenu(btn); }
+});
+// "Load name" in a level's Song box
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-song-load]');
+  if (!b) return;
+  e.preventDefault();
+  const id = b.dataset.songLoad;
+  b.disabled = true; b.textContent = 'Loading…';
+  let res;
+  try { res = await window.aredl.getSongInfo(Number(id), {}); } catch (err) { res = { ok: false, error: err.message }; }
+  if (res && res.ok) {
+    songInfoCache.set(id, { info: { name: res.name, artist: res.artist }, epoch: refreshEpoch });
+    rememberSong(id, { name: res.name, artist: res.artist }); // redraws the Song box, favourites and search
+  } else if (b.isConnected) {
+    b.disabled = false; b.textContent = 'Try again';
+    b.title = (res && res.error) || 'The name couldn’t be found';
+  }
 });
 
 document.addEventListener('contextmenu', (e) => {
@@ -3587,10 +3717,11 @@ function hslToRgbArr(h, s, l) { // h 0-360, s/l 0-1 -> [r,g,b] 0-255
   const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
   return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
 }
-// what shows before a level has been looked at (or if its picture can't be read): a calm blue-violet wash
+// what shows before a level has been looked at (or if its picture can't be read): a warm ember wash
 function shaderDefaultColours() {
   const out = [];
-  for (let i = 0; i < SHADER_N; i++) { const c = i % SHADER_COLS, r = Math.floor(i / SHADER_COLS); out.push(...hslToRgbArr(225 + ((c * 9 + r * 14) % 46), 0.5, 0.36)); }
+  // no level picked yet: a warm ember glow (deep rose-red through to orange), the same family as the app's orange accent
+  for (let i = 0; i < SHADER_N; i++) { const c = i % SHADER_COLS, r = Math.floor(i / SHADER_COLS); out.push(...hslToRgbArr((350 + ((c * 9 + r * 14) % 48)) % 360, 0.82, 0.48 + 0.08 * (((c + r) % 3) / 2))); }
   return out;
 }
 function shaderRegions(vid) {
@@ -3786,7 +3917,7 @@ function levelToolsHtml(level, { follow = false, song = false } = {}) {
     : '';
   // the song's name is only looked up when this is clicked (see openSongMenu)
   const songBtn = song && Number(level.song) > 0
-    ? `<button class="icon-tool" data-tip="Song options" data-song-menu="${escapeHtml(String(level.song))}" aria-label="Song options" aria-haspopup="menu">${icon('<path d="M8 15V5.2l8-1.7V13"/><circle cx="6" cy="15" r="2"/><circle cx="14" cy="13" r="2"/>')}</button>`
+    ? `<button class="icon-tool" data-tip="Song options" data-song-menu="${escapeHtml(String(level.song))}" data-song-level="${escapeHtml(String(level.level_id))}" aria-label="Song options" aria-haspopup="menu">${icon('<path d="M8 15V5.2l8-1.7V13"/><circle cx="6" cy="15" r="2"/><circle cx="14" cy="13" r="2"/>')}</button>`
     : '';
   const expanded = appSettings.toolsExpanded !== false;
   return `<span class="title-tools">
@@ -3797,6 +3928,7 @@ function levelToolsHtml(level, { follow = false, song = false } = {}) {
     <a class="icon-tool" data-tip="Open in AREDL" href="${escapeHtml(levelWebUrl(id, modeOfLevel(level)))}" target="_blank" rel="noopener" aria-label="Open in AREDL">${icon('<path d="M11 4h5v5"/><path d="M16 4l-7 7"/><path d="M14 11.5V15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5"/>')}</a>` : ''}
     <a class="icon-tool" data-tip="Search on YouTube" href="${escapeHtml(yt)}" target="_blank" rel="noopener" aria-label="Search on YouTube">${icon('<rect x="2.5" y="5" width="15" height="10" rx="3"/><path d="M8.5 7.8v4.4l3.8-2.2z" fill="currentColor"/>')}</a>
     ${songBtn}
+    ${song && level.level_id != null ? `<button class="icon-tool" data-tip="Add to a list" data-lists-menu="${escapeHtml(String(level.level_id))}" data-lists-mode="${modeOfLevel(level)}" data-lists-name="${escapeHtml(level.name || '')}" aria-label="Add to a list">${icon('<path d="M4 5h9M4 10h9M4 15h5"/><path d="M15 12v6M12 15h6"/>')}</button>` : ''}
     </span>
   </span>`;
 }
@@ -3826,13 +3958,19 @@ document.addEventListener('click', (e) => {
 // The number copies on click; the ↗ stays a separate link to Newgrounds.
 function songHtmlFor(level) {
   if (level.song == null) return '—';
-  if (level.song < 0) return 'DEFAULT';
-  return `<span class="copyable" data-copy="${escapeHtml(level.song)}" data-copy-label="Song ID" title="Click to copy">${escapeHtml(level.song)}</span> <a class="song-link" href="https://www.newgrounds.com/audio/listen/${level.song}" target="_blank" rel="noopener" title="Open on Newgrounds">↗</a>`;
+  if (level.song < 0) {
+    const o = officialSong(level.song);
+    return o ? `<span title="One of the game’s own songs">${escapeHtml(o.name)}</span> <span class="song-known">· ${escapeHtml(o.artist)}</span>` : 'DEFAULT';
+  }
+  const known = songLabelOf(level.song);
+  // not looked up yet: a button right here loads the name (it also fills in everywhere else the song shows)
+  const loadBtn = !known && appSettings.showSongNames !== false ? ` <button type="button" class="song-load" data-song-load="${escapeHtml(level.song)}" title="Look up this song’s name">Load name</button>` : '';
+  return `<span class="copyable" data-copy="${escapeHtml(level.song)}" data-copy-label="Song ID" title="Click to copy">${escapeHtml(level.song)}</span> <a class="song-link" href="https://www.newgrounds.com/audio/listen/${level.song}" target="_blank" rel="noopener" title="Open on Newgrounds">↗</a>${known ? ` <span class="song-known">· ${escapeHtml(known)}</span>` : loadBtn}`;
 }
 function levelIdHtmlFor(level) {
   return level.level_id == null ? '—' : `<span class="copyable" data-copy="${escapeHtml(level.level_id)}" data-copy-label="Level ID" title="Click to copy">${escapeHtml(level.level_id)}</span>`;
 }
-function gddlText(level) { return level.gddl_tier != null ? String(Math.round(level.gddl_tier * 10) / 10) : '—'; }
+function gddlText(level) { return level.gddl_tier != null ? fmtTier(level.gddl_tier) : '—'; }
 function enjText(level) { return level.edel_enjoyment != null ? Math.round(level.edel_enjoyment) + '%' : '—'; }
 
 // ---- Level names inside descriptions become links (checked against the loaded list only) ----
@@ -3911,7 +4049,7 @@ function selectLevel(level, { force = false } = {}) {
   state.selectedId = level.id;
   document.querySelectorAll('.list-row').forEach(r => r.classList.toggle('selected', r.dataset.id === String(level.id)));
 
-  const gddl = level.gddl_tier != null ? Math.round(level.gddl_tier * 10) / 10 : '—';
+  const gddl = gddlText(level);
   const enj = level.edel_enjoyment != null ? Math.round(level.edel_enjoyment) + '%' : '—';
   const desc = level.description ? linkifyLevels(level.description, level.level_id) : 'No description available.';
   // The number copies on click; the ↗ stays a separate link to Newgrounds.
@@ -3932,7 +4070,7 @@ function selectLevel(level, { force = false } = {}) {
         <div class="stat-plain"><div class="stat-label">Level ID</div><div class="stat-value">${levelIdHtml}</div></div>
         <div class="stat-plain"><div class="stat-label">List Points</div><div class="stat-value">${formatPoints(level.points)}</div></div>
         <div class="stat-plain"><div class="stat-label">Edel Enjoyment</div><div class="stat-value">${enj}</div></div>
-        <div class="stat-plain"><div class="stat-label">Song</div><div class="stat-value">${songHtml}</div></div>
+        <div class="stat-plain"><div class="stat-label">Song</div><div class="stat-value" data-song-stat="${escapeHtml(level.song ?? '')}">${songHtml}</div></div>
         <div class="stat-plain"><div class="stat-label">NLW Tier</div><div class="stat-value">${escapeHtml(level.nlw_tier || '—')}</div></div>
         <div class="stat-plain"><div class="stat-label">GDDL Tier</div><div class="stat-value">${gddl}</div></div>
       </div>
@@ -4134,6 +4272,7 @@ function updateMultiViewedUi() {
   set('multiPointsIndiv', `(${formatPoints(level.points)})`);
   set('multiEnjIndiv', `(${enjText(level)})`);
   set('multiSong', songHtmlFor(level));
+  { const se = document.getElementById('multiSong'); if (se) se.dataset.songStat = level.song == null ? '' : String(level.song); }
   set('multiNlw', escapeHtml(level.nlw_tier || '—'));
   set('multiGddl', escapeHtml(gddlText(level)));
   const own = new Set((level.tags || []).map(t => String(t).toLowerCase()));
@@ -4908,7 +5047,8 @@ $('#searchClearBtn').addEventListener('click', clearSearch);
 $('#statusFilter').addEventListener('change', applyFilters);
 $('#sortBy').addEventListener('change', applyFilters);
 $('#completedOnly').addEventListener('change', applyFilters);
-wireRefreshButton('refreshBtn', async () => {
+// Reloads the list and whatever is selected. (The Refresh button opens a popup with this as one of its two choices; see features.js.)
+async function refreshLevelData() {
   const selectedId = state.selectedId;
   const wasMulti = state.multi.size >= 2;
   await loadLevels();
@@ -4917,7 +5057,7 @@ wireRefreshButton('refreshBtn', async () => {
     const level = state.levels.find(l => String(l.id) === String(selectedId));
     if (level) selectLevel(level, { force: true });
   }
-});
+}
 
 // ---------------------------------------------------------------------------
 // Records side panel (confirmed: GET /aredl/levels/{level_id}/records)
@@ -5505,7 +5645,7 @@ function humanizeKey(k) {
 function formatValue(v) {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-  if (typeof v === 'number') return v.toLocaleString();
+  if (typeof v === 'number') return cleanNum(v, 6).toLocaleString();
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v)) return new Date(v).toLocaleString();
   return String(v);
 }
@@ -5520,6 +5660,16 @@ function avatarUrl(data) {
 // The API's raw `points` field is 10x what the site actually displays.
 function formatPoints(p) {
   return ((p || 0) / 10).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+// Numbers with a decimal that is only floating-point noise (12.000000000000002, 0.30000000000000004) are cleaned up.
+const cleanNum = (v, dp = 6) => { const n = Number(v); return Number.isFinite(n) ? parseFloat(n.toFixed(dp)) : n; };
+// Tiers: a whole number stays whole; anything else always has exactly two decimals (12.5 -> 12.50, 12.345 -> 12.35).
+function fmtTier(v) {
+  if (v == null || v === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  const c = parseFloat(n.toFixed(2));
+  return Number.isInteger(c) ? String(c) : c.toFixed(2);
 }
 
 function findLevelArrayDeep(obj, seen = new Set(), depth = 0) {

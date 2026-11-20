@@ -3,3 +3,4 @@ dist/
 *.log
 .DS_Store
 build/release-notes.md
+drive-config.local.js

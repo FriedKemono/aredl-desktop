@@ -137,10 +137,10 @@
     {
       id: 'personal',
       tab: 'personal',
-      target: '#tab-personal .tab-title-row',
+      target: ['#tab-personal .tab-title-row', '#plStatsBtn'],
       side: 'bottom',
       title: 'Personal list',
-      body: 'Your own hardest list, with attempts, physics, version, date and video for every level you’ve beaten. You can also log partial runs like <code>53-79</code>: they get their own list, and a level shows how few runs cover every % from 1 to 100. Click a stat to copy it, or export everything as CSV.',
+      body: 'Your own hardest list, with attempts, physics, version, date and video for every level you’ve beaten. You can also log partial runs like <code>53-79</code>: they get their own list, and a level shows how few runs cover every % from 1 to 100. Click a stat to copy it, or export everything as CSV. The <b>Stats</b> button opens charts and a yearly recap.',
     },
     {
       id: 'topbar',
