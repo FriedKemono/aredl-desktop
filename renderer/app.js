@@ -9,7 +9,7 @@ async function attachSubmissionBg(item, i) {
         detailCache.set(levelId, detail);
       }
       return vidOfDetail(detail);
-    });
+    }, 'cards', 'aredl'); // submissions start from AREDL's picture (YouTube's when AREDL has none)
     if (!css) return;
     const card = document.getElementById(`sub-${i}`);
     if (card) {
@@ -1175,6 +1175,12 @@ function applyDensity() {
   relayoutList(); // rows are a different height now
 }
 $('#densitySelect').addEventListener('change', () => { setSetting('density', $('#densitySelect').value); applyDensity(); });
+function applyListThumbs() { // pictures behind the Demon List's rows
+  const on = appSettings.listThumbs === true;
+  $('#listThumbsToggle').checked = on;
+  document.body.classList.toggle('list-thumbs', on);
+}
+$('#listThumbsToggle').addEventListener('change', () => { setSetting('listThumbs', $('#listThumbsToggle').checked); applyListThumbs(); if (typeof renderList === 'function') renderList(); });
 
 function applyMotion() {
   document.body.classList.toggle('no-motion', !!appSettings.reduceMotion);
@@ -1269,6 +1275,7 @@ function applyAppearance() {
   applyAccentOverride();
   applyRadius();
   applyDensity();
+  applyListThumbs();
   applyMotion();
   applyPerf();
   applyBgBright();
@@ -1280,6 +1287,7 @@ function applyAppearance() {
 async function initSettings() {
   try { appSettings = (await window.aredl.getSettings()) || {}; } catch { appSettings = {}; }
   await loadThumbOverrides();
+  thumbRev = Number(appSettings.thumbRev) || 0;
   try { customBg = await window.aredl.bgInfo(); } catch { /* no custom backdrop */ }
   if (customBg.on) setPageBackground(null); // a chosen backdrop shows from the start, before any level is opened
   applyRawVisibility();
@@ -1544,7 +1552,7 @@ function renderApiLog() {
   const mlist = miscLog.slice().reverse();
   $('#miscLogList').innerHTML = mlist.length
     ? mlist.map(e => logRowHtml(e, describeMisc(e))).join('')
-    : '<div class="dim">Nothing yet. Song name lookups show up here.</div>';
+    : '<div class="dim">Nothing yet. Song name lookups and AREDL level pictures show up here.</div>';
 }
 
 async function loadApiLog() {
@@ -1768,7 +1776,7 @@ function rememberSong(id, info) { if (info && info.name) { songNames.set(String(
 // the Song box in a level's details follows along when a name becomes known (no need to leave the tab and come back)
 let songStatsQueued = false;
 function refreshSongStats() {
-  document.querySelectorAll('[data-song-stat]').forEach(el => { el.innerHTML = songHtmlFor({ song: Number(el.dataset.songStat) }); });
+  document.querySelectorAll('[data-song-stat]').forEach(el => { el.innerHTML = songHtmlFor({ song: Number(el.dataset.songStat), level_id: el.dataset.songLevel || null }); });
 }
 function queueSongStats() { if (songStatsQueued) return; songStatsQueued = true; requestAnimationFrame(() => { songStatsQueued = false; refreshSongStats(); }); }
 function songLabelOf(id) {
@@ -1969,13 +1977,26 @@ const listV = { items: [], tops: [], total: 0, rowH: 40, divH: 38, start: -1, en
 const LIST_BUFFER_PX = 700; // how far above / below the visible part rows are kept ready
 const LIST_REFRESH_PX = 250; // rebuild once the visible part gets this close to the edge of the drawn rows
 
+// AREDL's picture behind each row of the Demon List (Settings → Display). Only the rows that are drawn ask for a picture, and a level
+// AREDL has none for is found out once and left alone.
+const rowThumbSeen = new Set();
+function queueRowThumb(id) {
+  if (rowThumbSeen.has(id)) return;
+  rowThumbSeen.add(id);
+  const u = picUrl(`a:${id}`, 'cards'), im = new Image();
+  im.onload = () => logPic(u, true);
+  im.onerror = () => { logPic(u, false); aredlMissing.add(String(id)); document.querySelectorAll(`.list-row[data-level-id="${CSS.escape(String(id))}"]`).forEach(r => { r.classList.remove('has-thumb'); r.style.removeProperty('--row-thumb'); }); };
+  im.src = u;
+}
 function listRowHtml(l, favIds, followIds) {
   const isFav = favIds.has(String(l.level_id)), isFollow = followIds.has(String(l.level_id));
   const completed = state.completedIds.has(String(l.level_id));
   const selected = isRowSelected(l.id);
   const hasPosition = l.position != null;
   const rankLabel = hasPosition ? `#${l.position}` : ((l.status === 'Pending' || l.status === 'Removed') ? '—' : (l.status || 'Legacy'));
-  return `<div class="list-row ${completed ? 'completed' : ''} ${selected ? 'selected' : ''} ${l.status === 'Removed' ? 'removed' : ''} ${isFav ? 'favourite' : ''} ${isFollow ? 'followed' : ''}"
+  const thumb = appSettings.listThumbs === true && l.level_id != null && !aredlMissing.has(String(l.level_id));
+  if (thumb) queueRowThumb(String(l.level_id));
+  return `<div class="list-row ${completed ? 'completed' : ''} ${selected ? 'selected' : ''} ${l.status === 'Removed' ? 'removed' : ''} ${isFav ? 'favourite' : ''} ${isFollow ? 'followed' : ''}${thumb ? ' has-thumb' : ''}"${thumb ? ` style="--row-thumb:url(${picUrl(`a:${l.level_id}`, 'cards')});"` : ''}
          data-id="${l.id}" data-level-id="${l.level_id}">
       <span class="rank-mini${hasPosition ? '' : (rankLabel === '—' ? ' rank-mini-dash' : ' rank-mini-status')}">${escapeHtml(rankLabel)}</span>
       <span class="name-mini">${escapeHtml(l.name)}</span>
@@ -3190,6 +3211,7 @@ async function loadLeaderboard(page = lbState.page) {
       ? await window.aredl.getCountries(page, tabModes.leaderboard)
       : await window.aredl.getLeaderboard(page, tabModes.leaderboard);
     lbState.page = page;
+    const raw = $('#lbRawZone'); if (raw) raw.innerHTML = lbState.data ? rawDetails(`Full API response (${lbState.board === 'countries' ? 'countries' : 'players'}, page ${page})`, lbState.data) : '';
   } catch (err) {
     lbState.error = errMsg(err);
   }
@@ -3369,9 +3391,12 @@ function levelMenuItems(level) {
 }
 // the picture this level uses as its backdrop: switch it for this level, or go back to the setting
 function pictureMenuItems(level) {
-  const now = thumbSourceOf(level.level_id), own = thumbOverrides.has(String(level.level_id));
-  const items = [{ label: now === 'aredl' ? 'Use YouTube’s picture for this level' : 'Use AREDL’s picture for this level', onClick: () => setThumbOverride(level, now === 'aredl' ? 'youtube' : 'aredl') }];
-  if (own) items.push({ label: 'Use the default picture for this level', onClick: () => setThumbOverride(level, null) });
+  const own = thumbOverrides.has(String(level.level_id)), now = thumbSourceOf(level.level_id);
+  const aredl = { label: 'Use AREDL’s picture for this level', onClick: () => setThumbOverride(level, 'aredl') };
+  const yt = { label: 'Use YouTube’s picture for this level', onClick: () => setThumbOverride(level, 'youtube') };
+  // with a custom backdrop the default is that file, so both pictures are offered; otherwise the one that is not in use
+  const items = customBg.on ? (own ? [thumbOverrides.get(String(level.level_id)) === 'aredl' ? yt : aredl] : [aredl, yt]) : [now === 'aredl' ? yt : aredl];
+  if (own) items.push({ label: customBg.on ? 'Use the custom backdrop for this level' : 'Use the default picture for this level', onClick: () => setThumbOverride(level, null) });
   return items;
 }
 
@@ -3513,6 +3538,18 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-song-menu]');
   if (btn) { e.preventDefault(); openSongMenu(btn); }
 });
+// the song ID in a level's Song box (single level and multi-select): the other levels with that song, and a button to copy the ID
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-song-id]');
+  if (!b) return;
+  e.preventDefault();
+  if (window.fx && fx.openSongLevels) fx.openSongLevels(b.dataset.songId, b.dataset.songLevel || null);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const b = e.target.closest && e.target.closest('[data-song-id]');
+  if (b) { e.preventDefault(); b.click(); }
+});
 // "Load name" in a level's Song box
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('[data-song-load]');
@@ -3592,6 +3629,14 @@ let currentBgVid = null;
 // A picture is named by a key: a YouTube id, 'a:<level id>' for AREDL's, or 'custom'.
 const AREDL_THUMBS = 'https://raw.githubusercontent.com/All-Rated-Extreme-Demon-List/Thumbnails/main';
 let thumbOverrides = new Map();   // level id -> 'youtube' | 'aredl' (chosen for one level; wins over the setting)
+let thumbRev = 0;                 // changes when "refresh level pictures" is used, so AREDL's pictures are fetched again
+const picLogged = new Set();      // pictures already written to the request log this session (the browser keeps them after the first load)
+function logPic(url, ok) { if (!url.startsWith(AREDL_THUMBS) || picLogged.has(url)) return; picLogged.add(url); try { window.aredl.logPicRequest(url, ok); } catch { /* the log is optional */ } }
+function refreshAredlPictures() { // AREDL's pictures are loaded again, including levels that had none last time
+  thumbRev = Date.now(); setSetting('thumbRev', thumbRev);
+  aredlMissing.clear(); picLogged.clear(); adaptiveCache.clear(); shaderCache.clear();
+  refreshPictures();
+}
 const aredlMissing = new Set();   // level ids AREDL has no picture for (found out by one failed load, never asked for again)
 const picFallback = new Map();    // 'a:<id>' -> the YouTube id to show if AREDL has no picture
 let customBg = { on: false, has: false, type: null, name: '', ver: 0 }; // the custom backdrop file (an image, GIF or video)
@@ -3599,13 +3644,13 @@ const thumbDefault = () => (appSettings && appSettings.bgSource === 'aredl' ? 'a
 const thumbSourceOf = (levelId) => thumbOverrides.get(String(levelId)) || thumbDefault();
 const picIsAredl = (key) => typeof key === 'string' && key.startsWith('a:');
 function picKey(levelId, vid) { // the picture to use for a level (null = none)
-  if (customBg.on) return 'custom';
+  if (customBg.on && !(levelId != null && thumbOverrides.has(String(levelId)))) return 'custom'; // a picture chosen for this level wins over the custom backdrop
   if (levelId != null && thumbSourceOf(levelId) === 'aredl' && !aredlMissing.has(String(levelId))) { const k = `a:${levelId}`; if (vid) picFallback.set(k, vid); return k; }
   return vid || null;
 }
 function picUrl(key, kind = 'full') { // kind: 'full' (the whole picture) or 'cards' (AREDL's wide strip, made for banners)
   if (key === 'custom') return `/_bg/current?v=${customBg.ver}`;
-  if (picIsAredl(key)) return `${AREDL_THUMBS}/levels/${kind}/${encodeURIComponent(key.slice(2))}.webp`;
+  if (picIsAredl(key)) return `${AREDL_THUMBS}/levels/${kind}/${encodeURIComponent(key.slice(2))}.webp${thumbRev ? `?r=${thumbRev}` : ''}`;
   return `https://img.youtube.com/vi/${key}/hqdefault.jpg`;
 }
 // loads a picture and hands over something that can be drawn (a custom video gives one frame of itself)
@@ -3621,15 +3666,18 @@ function withPic(key, onOk, onFail) {
   }
   const img = new Image();
   img.crossOrigin = 'anonymous';
-  img.onload = () => onOk(img, img.width, img.height);
-  img.onerror = () => onFail();
-  img.src = picUrl(key);
+  const url = picUrl(key);
+  img.onload = () => { if (picIsAredl(key)) logPic(url, true); onOk(img, img.width, img.height); };
+  img.onerror = () => { if (picIsAredl(key)) logPic(url, false); onFail(); };
+  img.src = url;
 }
 // the CSS background for a banner (profile / submission): AREDL's strip, else YouTube's thumbnail of the video
-async function bannerPicCss(levelId, getVid, kind = 'cards') {
-  if (thumbSourceOf(levelId) === 'aredl' && !aredlMissing.has(String(levelId))) {
+async function bannerPicCss(levelId, getVid, kind = 'cards', prefer = null) {
+  // a choice made for this level wins; otherwise `prefer` (a page that always starts from AREDL's picture), otherwise the setting
+  const src = thumbOverrides.get(String(levelId)) || prefer || thumbDefault();
+  if (src === 'aredl' && !aredlMissing.has(String(levelId))) {
     const key = `a:${levelId}`;
-    const ok = await new Promise(res => { const i = new Image(); i.onload = () => res(true); i.onerror = () => res(false); i.src = picUrl(key, kind); });
+    const ok = await new Promise(res => { const u = picUrl(key, kind), i = new Image(); i.onload = () => { logPic(u, true); res(true); }; i.onerror = () => { logPic(u, false); res(false); }; i.src = u; });
     if (ok) return `url(${picUrl(key, kind)})`;
     aredlMissing.add(String(levelId));
   }
@@ -3651,6 +3699,7 @@ function refreshPictures() {
   bgShownVid = null;
   const sel = state.selectedId != null ? state.levels.find(l => l.id === state.selectedId) : null;
   if (sel && document.getElementById('tab-list').classList.contains('active')) setPageBackground(picKey(sel.level_id, currentVidOfLevel(sel.level_id)));
+  else if (customBg.on || currentBgVid === 'custom') setPageBackground(null); // the custom backdrop (or none) when no level is open
   if (typeof refreshProfileBanners === 'function') refreshProfileBanners();
 }
 const levelVidCache = new Map(); // level id -> YouTube id of its video (known once its detail was looked at)
@@ -3659,7 +3708,7 @@ function setThumbOverride(level, source) { // source: 'youtube' | 'aredl' | null
   if (source) thumbOverrides.set(String(level.level_id), source); else thumbOverrides.delete(String(level.level_id));
   saveThumbOverrides();
   refreshPictures();
-  showToast(source ? `${level.name} now uses ${source === 'aredl' ? 'AREDL’s' : 'YouTube’s'} picture.` : `${level.name} uses the default picture.`);
+  showToast(source ? `${level.name} now uses ${source === 'aredl' ? 'AREDL’s' : 'YouTube’s'} picture.` : `${level.name} uses the ${customBg.on ? 'custom backdrop' : 'default picture'}.`);
 }
 const adaptiveCache = new Map();
 const ADAPTIVE_DEFAULT = '#7dd3fc';
@@ -3995,7 +4044,7 @@ document.addEventListener('visibilitychange', shaderSync);
 window.addEventListener('resize', () => { if (shader.cv && document.body.classList.contains('bg-shader')) { shaderResize(); shaderSync(); } });
 
 function setPageBackground(vid) {
-  if (customBg.on) vid = 'custom'; // one chosen backdrop, whichever level is open
+  if (customBg.on && !vid) vid = 'custom'; // the one chosen backdrop, unless a level has its own picture chosen (picKey decides)
   currentBgVid = vid || null;
   if (document.body.classList.contains('bg-shader')) shaderSetVid(currentBgVid);
   adaptAccent(currentBgVid);
@@ -4031,10 +4080,12 @@ function setPageBackground(vid) {
   // load the picture first, then fade it in over the old one - no blank flash while it downloads
   const img = new Image();
   img.onload = () => {
+    if (picIsAredl(vid)) logPic(url, true);
     if (token !== bgToken) return; // a newer level was chosen meanwhile
     show((layer) => { layer.style.backgroundImage = `url(${url})`; });
   };
-  img.onerror = () => { // AREDL has no picture for this level: its YouTube one is used instead (and AREDL isn't asked again)
+  img.onerror = () => { // AREDL has no picture
+    if (picIsAredl(vid)) logPic(url, false); // (AREDL has no picture for this level: its YouTube one is used instead, and AREDL isn't asked again)
     if (token !== bgToken || !picIsAredl(vid)) return;
     aredlMissing.add(vid.slice(2));
     setPageBackground(picFallback.get(vid) || null);
@@ -4083,6 +4134,7 @@ function levelToolsHtml(level, { follow = false, song = false } = {}) {
     <button class="icon-tool tools-toggle" data-tools-toggle data-tip="Show / hide buttons" aria-label="Show or hide the buttons" aria-expanded="${expanded}">${icon('<path d="M12 5l-5 5 5 5"/>')}</button>
     <span class="tools-items">
     ${followBtn}
+    ${id != null ? `<button class="icon-tool" data-tip="View backdrop picture" data-view-pic="${escapeHtml(String(id))}" data-view-mode="${modeOfLevel(level)}" data-view-name="${escapeHtml(level.name || '')}" aria-label="View backdrop picture">${icon('<rect x="2.8" y="4" width="14.4" height="12" rx="2.4"/><circle cx="7.4" cy="8.4" r="1.4"/><path d="M3.5 14.5l4-3.7 3 2.6 2.2-2 3.8 3.6"/>')}</button>` : ''}
     ${id != null ? `<button class="icon-tool" data-tip="Copy AREDL link" data-copy-aredl="${escapeHtml(String(id))}" data-copy-mode="${modeOfLevel(level)}" aria-label="Copy AREDL link">${icon('<path d="M8.5 11.5a3.2 3.2 0 0 0 4.5 0l2.6-2.6a3.2 3.2 0 0 0-4.5-4.5l-.9.9"/><path d="M11.5 8.5a3.2 3.2 0 0 0-4.5 0l-2.6 2.6a3.2 3.2 0 0 0 4.5 4.5l.9-.9"/>')}</button>
     <a class="icon-tool" data-tip="Open in AREDL" href="${escapeHtml(levelWebUrl(id, modeOfLevel(level)))}" target="_blank" rel="noopener" aria-label="Open in AREDL">${icon('<path d="M11 4h5v5"/><path d="M16 4l-7 7"/><path d="M14 11.5V15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5"/>')}</a>` : ''}
     <a class="icon-tool" data-tip="Search on YouTube" href="${escapeHtml(yt)}" target="_blank" rel="noopener" aria-label="Search on YouTube">${icon('<rect x="2.5" y="5" width="15" height="10" rx="3"/><path d="M8.5 7.8v4.4l3.8-2.2z" fill="currentColor"/>')}</a>
@@ -4099,6 +4151,10 @@ function applyToolsState() {
   document.body.classList.toggle('tools-collapsed', !expanded);
   document.querySelectorAll('[data-tools-toggle]').forEach(b => b.setAttribute('aria-expanded', String(expanded)));
 }
+document.addEventListener('click', (e) => {
+  const v = e.target.closest('[data-view-pic]');
+  if (v) { e.preventDefault(); fx.openPictureView(v.dataset.viewPic, v.dataset.viewMode, v.dataset.viewName); }
+});
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-tools-toggle]');
   if (!b) return;
@@ -4124,7 +4180,7 @@ function songHtmlFor(level) {
   const known = songLabelOf(level.song);
   // not looked up yet: a button right here loads the name (it also fills in everywhere else the song shows)
   const loadBtn = !known && appSettings.showSongNames !== false ? ` <button type="button" class="song-load" data-song-load="${escapeHtml(level.song)}" title="Look up this song’s name">Load name</button>` : '';
-  return `<span class="copyable" data-copy="${escapeHtml(level.song)}" data-copy-label="Song ID" title="Click to copy">${escapeHtml(level.song)}</span> <a class="song-link" href="https://www.newgrounds.com/audio/listen/${level.song}" target="_blank" rel="noopener" title="Open on Newgrounds">↗</a>${known ? ` <span class="song-known">· ${escapeHtml(known)}</span>` : loadBtn}`;
+  return `<span class="song-id" role="button" tabindex="0" data-song-id="${escapeHtml(level.song)}" data-song-level="${escapeHtml(level.level_id ?? '')}" data-tip="Other levels with this song">${escapeHtml(level.song)}</span> <a class="song-link" href="https://www.newgrounds.com/audio/listen/${level.song}" target="_blank" rel="noopener" title="Open on Newgrounds">↗</a>${known ? ` <span class="song-known">· ${escapeHtml(known)}</span>` : loadBtn}`;
 }
 function levelIdHtmlFor(level) {
   return level.level_id == null ? '—' : `<span class="copyable" data-copy="${escapeHtml(level.level_id)}" data-copy-label="Level ID" title="Click to copy">${escapeHtml(level.level_id)}</span>`;
@@ -4132,31 +4188,42 @@ function levelIdHtmlFor(level) {
 function gddlText(level) { return level.gddl_tier != null ? fmtTier(level.gddl_tier) : '—'; }
 function enjText(level) { return level.edel_enjoyment != null ? Math.round(level.edel_enjoyment) + '%' : '—'; }
 
-// ---- Level names inside descriptions become links (checked against the loaded list only) ----
-let levelIndexCache = { src: null };
+// ---- Level names inside descriptions become links (checked against the loaded lists only) ----
+// Both lists are searched (the list on screen wins when a name exists in both). A level written "NAME (CREATOR)" is found by NAME:
+// anything in brackets, in the level's own name and after a name in a description, is never looked at.
+let levelIndexCache = { sig: null };
+const stripBrackets = (str) => String(str).replace(/\s*[(\[{][^)\]}]*[)\]}]/g, ' ').replace(/\s+/g, ' ').trim();
 function levelNameIndex() {
-  if (levelIndexCache.src === state.levels) return levelIndexCache;
-  const norm = (str) => String(str).toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/\s+/g, ' ');
+  const lists = MODES.map(m => levelsOf(m));
+  const sig = lists.map(l => `${l.length}`).join(':') + ':' + tabModes.list;
+  if (levelIndexCache.sig === sig && levelIndexCache.lists && lists.every((l, i) => l === levelIndexCache.lists[i])) return levelIndexCache;
+  const norm = (str) => String(str).toLowerCase().replace(/[‘’´`]/g, "'").replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').replace(/\s+/g, ' ');
   const map = new Map();
   let maxWords = 1;
-  for (const l of state.levels) {
-    // duplicate names are written "NAME (creator)" - link by the plain name, and the hardest one wins
-    const base = String(l.name).replace(/\s*[(\[][^)\]]*[)\]]/g, ' ').trim() || String(l.name);
-    const key = norm(base);
-    if (key.length < 3) continue;
-    const prev = map.get(key);
-    if (!prev || (l.position ?? 1e9) < (prev.position ?? 1e9)) map.set(key, l);
-    maxWords = Math.max(maxWords, key.split(' ').length);
+  // the list on screen first, so that it wins a tie; within a list the hardest level wins
+  const order = [...MODES].sort((a, b) => (a === tabModes.list ? -1 : 0) - (b === tabModes.list ? -1 : 0));
+  const seenFrom = new Map();
+  for (const m of order) {
+    for (const l of levelsOf(m)) {
+      const key = norm(stripBrackets(l.name) || l.name);
+      if (key.length < 3) continue;
+      const prev = map.get(key);
+      if (!prev || (seenFrom.get(key) === m && (l.position ?? 1e9) < (prev.position ?? 1e9))) { map.set(key, l); seenFrom.set(key, m); }
+      maxWords = Math.max(maxWords, key.split(' ').length);
+    }
   }
-  levelIndexCache = { src: state.levels, map, norm, maxWords: Math.min(maxWords, 7) };
+  levelIndexCache = { sig, lists, map, norm, maxWords: Math.min(maxWords, 7) };
   return levelIndexCache;
 }
 const LINK_STOPWORDS = new Set(['this', 'that', 'with', 'from', 'have', 'level', 'levels', 'list', 'video', 'verified', 'verification', 'first', 'second', 'third', 'hard', 'easy', 'best', 'good', 'long', 'last', 'part', 'game', 'song', 'music', 'demon', 'extreme', 'insane', 'free', 'full', 'time', 'life', 'world', 'road', 'sequel', 'remake', 'official']);
 function linkifyLevels(text, selfLevelId) {
   const idx = levelNameIndex();
+  text = String(text);
   if (!idx.map || !idx.map.size) return escapeHtml(text);
   const tokens = [];
-  const re = /[^\s/\\|+]+/g; // words split on spaces and on / \ | +  ("Fog/Shimmer" -> Fog, Shimmer)
+  // words split on spaces and on / \ | + & , ; … → – —  ("Fog/Shimmer" -> Fog, Shimmer; "NAME/…" -> NAME); a name that itself holds one of
+  // these is still found, because several tokens are joined back together when matching
+  const re = /[^\s/\\|+&,;…→–—<>]+/g;
   let m;
   while ((m = re.exec(text))) tokens.push({ start: m.index, end: m.index + m[0].length });
   let out = '', cursor = 0, i = 0;
@@ -4164,10 +4231,11 @@ function linkifyLevels(text, selfLevelId) {
     let hit = null;
     for (let n = Math.min(idx.maxWords, tokens.length - i); n >= 1 && !hit; n--) {
       const raw = text.slice(tokens[i].start, tokens[i + n - 1].end);
+      if (/[(\[{)\]}]/.test(raw.replace(/^[(\[{]+|[)\]}]+$/g, ''))) continue; // a bracket in the middle of the words: not a name
       let key = idx.norm(raw);
       let extra = 0;
       let level = idx.map.get(key);
-      if (!level && /['’]s$/.test(key)) { key = key.replace(/['’]s$/, ''); level = idx.map.get(key); extra = 2; } // "Fog's"
+      if (!level && /'s$/.test(key)) { key = key.replace(/'s$/, ''); level = idx.map.get(key); extra = 2; } // "Fog's"
       if (!level || String(level.level_id) === String(selfLevelId)) continue;
       const bare = raw.replace(/^[^\p{L}\p{N}]+/u, '');
       // a single word must be Capitalised and not an everyday word, to keep false links down
@@ -4181,6 +4249,9 @@ function linkifyLevels(text, selfLevelId) {
         + `<a href="#" class="level-ref" data-jump="${escapeHtml(String(hit.level.level_id))}" title="Go to ${escapeHtml(hit.level.name)}">${escapeHtml(text.slice(hit.from, hit.to))}</a>`;
       cursor = hit.to;
       i += hit.n;
+      // "NAME (CREATOR)": the bracket after a name is skipped, whatever is inside it
+      const br = /^\s*[(\[{][^)\]}]*[)\]}]/.exec(text.slice(cursor));
+      if (br) { const end = cursor + br[0].length; out += escapeHtml(text.slice(cursor, end)); cursor = end; while (i < tokens.length && tokens[i].start < end) i++; }
     } else {
       i++;
     }
@@ -4229,7 +4300,7 @@ function selectLevel(level, { force = false } = {}) {
         <div class="stat-plain"><div class="stat-label">Level ID</div><div class="stat-value">${levelIdHtml}</div></div>
         <div class="stat-plain"><div class="stat-label">List Points</div><div class="stat-value">${formatPoints(level.points)}</div></div>
         <div class="stat-plain"><div class="stat-label">Edel Enjoyment</div><div class="stat-value">${enj}</div></div>
-        <div class="stat-plain"><div class="stat-label">Song</div><div class="stat-value" data-song-stat="${escapeHtml(level.song ?? '')}">${songHtml}</div></div>
+        <div class="stat-plain"><div class="stat-label">Song</div><div class="stat-value" data-song-stat="${escapeHtml(level.song ?? '')}" data-song-level="${escapeHtml(level.level_id ?? '')}">${songHtml}</div></div>
         <div class="stat-plain"><div class="stat-label">NLW Tier</div><div class="stat-value">${escapeHtml(level.nlw_tier || '—')}</div></div>
         <div class="stat-plain"><div class="stat-label">GDDL Tier</div><div class="stat-value">${gddl}</div></div>
       </div>
@@ -4431,7 +4502,7 @@ function updateMultiViewedUi() {
   set('multiPointsIndiv', `(${formatPoints(level.points)})`);
   set('multiEnjIndiv', `(${enjText(level)})`);
   set('multiSong', songHtmlFor(level));
-  { const se = document.getElementById('multiSong'); if (se) se.dataset.songStat = level.song == null ? '' : String(level.song); }
+  { const se = document.getElementById('multiSong'); if (se) { se.dataset.songStat = level.song == null ? '' : String(level.song); se.dataset.songLevel = level.level_id == null ? '' : String(level.level_id); } }
   set('multiNlw', escapeHtml(level.nlw_tier || '—'));
   set('multiGddl', escapeHtml(gddlText(level)));
   const own = new Set((level.tags || []).map(t => String(t).toLowerCase()));
@@ -4743,6 +4814,14 @@ window.aredl.onMiniReturned((d) => {
   if (f.onReturn) f.onReturn();
 });
 window.aredl.onMiniClosed(() => { floatCtx = null; });
+// the app is minimised or tucked into the tray while a video plays: the video carries on in the floating player
+window.aredl.onWindowAway(() => {
+  if (floatCtx) return;
+  const d = [...docks].find(x => x.isPlaying());
+  if (d) d.popOut(0, 0, true);
+});
+// ...and when the app is back, a video that was on its level's page goes back to it (one that was in the corner stays floating)
+window.aredl.onWindowBack(() => { if (floatCtx && floatCtx.auto && floatCtx.wasInline) window.aredl.miniRequestReturn(); });
 class VideoDock {
   constructor() {
     this.el = document.getElementById('dockTemplate').content.firstElementChild.cloneNode(true);
@@ -4760,15 +4839,15 @@ class VideoDock {
   }
 
   // the player leaves the app: a window of its own opens where the pointer is, at the same moment of the video
-  popOut(screenX, screenY) {
+  popOut(screenX, screenY, auto = false) {
     if (!this.vid || !docks.has(this)) return;
     const body = [...document.body.classList].filter(c => c !== 'nav-editing').join(' ');
     const payload = {
       vid: this.vid, time: this.time || 0, playing: this.isPlaying(), title: this.title,
-      width: Math.round(this.el.getBoundingClientRect().width), screenX: Math.round(screenX), screenY: Math.round(screenY),
+      width: Math.round(this.el.getBoundingClientRect().width) || miniPrefs.width, screenX: Math.round(screenX || 0), screenY: Math.round(screenY || 0), auto,
       rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: body,
     };
-    floatCtx = { vid: this.vid, onReturn: this.onReturn };
+    floatCtx = { vid: this.vid, onReturn: this.onReturn, auto, wasInline: this.mode === 'inline' };
     this.dragging = false;
     this.destroy();
     window.aredl.miniOpen(payload).then(ok => { if (!ok) floatCtx = null; }).catch(() => { floatCtx = null; });
@@ -6068,7 +6147,7 @@ function renderProfileTab(which) {
 }
 
 const PLAY_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4.6v10.8a.8.8 0 0 0 1.2.7l8.6-5.4a.8.8 0 0 0 0-1.4L8.2 3.9A.8.8 0 0 0 7 4.6Z" fill="currentColor"/></svg>';
-const YT_PLAY_ICON = '<svg viewBox="0 0 68 48" aria-hidden="true"><path d="M66.5 7.7a8.5 8.5 0 0 0-6-6C55.3.3 34 .3 34 .3S12.7.3 7.5 1.7a8.5 8.5 0 0 0-6 6C0 13 0 24 0 24s0 11 1.5 16.3a8.5 8.5 0 0 0 6 6C12.7 47.7 34 47.7 34 47.7s21.3 0 26.5-1.4a8.5 8.5 0 0 0 6-6C68 35 68 24 68 24s0-11-1.5-16.3z" fill="#f00"/><path d="M45 24 27 14v20" fill="#fff"/></svg>';
+const YT_PLAY_ICON = '<svg viewBox="0 0 68 48" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M66.5 7.7a8.5 8.5 0 0 0-6-6C55.3.3 34 .3 34 .3S12.7.3 7.5 1.7a8.5 8.5 0 0 0-6 6C0 13 0 24 0 24s0 11 1.5 16.3a8.5 8.5 0 0 0 6 6C12.7 47.7 34 47.7 34 47.7s21.3 0 26.5-1.4a8.5 8.5 0 0 0 6-6C68 35 68 24 68 24s0-11-1.5-16.3zM45 24 27 14v20z"/></svg>';
 const OPEN_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg>';
 function completedBannerHtml(l, kind = 'completed') {
   const isMe = state.currentProfileId === '__me__';
@@ -7009,19 +7088,19 @@ document.querySelectorAll('input[type=range]').forEach(enhanceSlider);
 function applyTitlebarToggles() {
   document.body.classList.toggle('tb-hide-icon', appSettings.tbShowIcon === false);
   document.body.classList.toggle('tb-hide-status', appSettings.tbShowStatus === false);
-  document.querySelectorAll('.tb-switch').forEach(sw => { const on = appSettings[sw.dataset.tb === 'icon' ? 'tbShowIcon' : 'tbShowStatus'] !== false; sw.classList.toggle('on', on); sw.setAttribute('aria-checked', String(on)); });
+  document.querySelectorAll('.tb-switch').forEach(sw => { sw.querySelector('input').checked = appSettings[sw.dataset.tb === 'icon' ? 'tbShowIcon' : 'tbShowStatus'] !== false; });
 }
 (function titlebarSwitches() {
   const inner = document.querySelector('.titlebar-inner');
-  const mk = (which, label, before) => {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'tb-switch'; b.dataset.tb = which; b.setAttribute('role', 'switch');
-    b.innerHTML = `<span class="tb-switch-track"><i></i></span><span class="tb-switch-label">${label}</span>`;
-    b.addEventListener('click', (e) => { e.stopPropagation(); const key = which === 'icon' ? 'tbShowIcon' : 'tbShowStatus'; setSetting(key, appSettings[key] === false); applyTitlebarToggles(); });
-    inner.insertBefore(b, before);
-    return b;
+  const mk = (which, label, before) => { // the app's own toggle: a checkbox in a label, as in Settings
+    const l = document.createElement('label');
+    l.className = 'checkbox-wrap tb-switch'; l.dataset.tb = which;
+    l.innerHTML = `<input type="checkbox"> ${label}`;
+    l.querySelector('input').addEventListener('change', (e) => { setSetting(which === 'icon' ? 'tbShowIcon' : 'tbShowStatus', e.target.checked); applyTitlebarToggles(); });
+    l.addEventListener('click', (e) => e.stopPropagation());
+    inner.insertBefore(l, before);
   };
-  mk('icon', 'Icon', document.querySelector('.titlebar-title'));
+  mk('icon', 'Logo and name', document.querySelector('.titlebar-icon'));
   mk('status', 'Logged in', document.getElementById('topStatus'));
 })();
 

@@ -5,5 +5,7 @@ contextBridge.exposeInMainWorld('aredlMini', {
   close: () => ipcRenderer.send('mini:close-self'),
   returnToApp: (state) => ipcRenderer.send('mini:return', state),
   moveTo: (x, y) => ipcRenderer.send('mini:move', x, y),
+  resize: (b) => ipcRenderer.send('mini:resize', b),
+  onRequestReturn: (cb) => ipcRenderer.on('mini:requestReturn', () => cb()),
   ready: () => ipcRenderer.send('mini:ready'),
 });

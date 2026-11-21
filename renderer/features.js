@@ -87,7 +87,7 @@
     if (!sel) return;
     sel.value = customBg.on ? 'custom' : (appSettings.bgSource === 'aredl' ? 'aredl' : 'youtube');
     $('#bgCustomLine').hidden = !customBg.on && !customBg.has && sel.value !== 'custom';
-    $('#bgCustomName').textContent = customBg.has ? `${customBg.name || 'A file'} (${customBg.type === 'video' ? 'video, plays silently on a loop' : 'image or GIF'}).` : 'No file chosen. Images, GIFs and videos work; videos play silently on a loop. The shader still takes its colours from it.';
+    $('#bgCustomName').textContent = customBg.has ? `${customBg.name || 'A file'} (${customBg.type === 'video' ? 'video, plays silently on a loop' : 'image or GIF'}). A file of 8 MB or less is included in Google Drive sync.` : 'No file chosen. Images, GIFs and videos work; videos play silently on a loop. The shader still takes its colours from it. A file of 8 MB or less is included in Google Drive sync.';
     $('#bgCustomClear').hidden = !customBg.has;
     $('#bgCustomPick').textContent = customBg.has ? 'Choose another file…' : 'Choose file…';
     const n = thumbOverrides.size;
@@ -96,8 +96,7 @@
   fx.refreshBackdropSettings = refreshBackdropSettings;
   function pictureChanged() { // what the backdrop shows is worked out again
     adaptiveCache.clear(); shaderCache.clear(); bgShownVid = null;
-    refreshPictures();
-    if (customBg.on) setPageBackground(null);
+    refreshPictures(); // (a level with its own picture keeps it; every other level shows the custom backdrop)
     refreshBackdropSettings();
   }
   $('#bgSourceSelect').addEventListener('change', async () => {
@@ -157,6 +156,41 @@
     draw();
   }
   fx.openThumbOverrides = openThumbOverrides;
+
+  // the picture a level uses as its backdrop, larger (what the setting, the level's own choice or a custom file gives)
+  fx.openPictureView = async function (levelId, mode, name) {
+    const m = openModal({ title: name || 'Backdrop picture', wide: true });
+    m.body.appendChild(el('div', 'state', 'Loading the picture…'));
+    const vidFor = async () => {
+      let v = currentVidOfLevel(levelId);
+      if (!v) { try { v = vidOfDetail(await fetchDetailCached(levelId, mode)); if (v) levelVidCache.set(String(levelId), v); } catch { v = null; } }
+      return v;
+    };
+    let key = picKey(levelId, currentVidOfLevel(levelId));
+    if (!key) key = picKey(levelId, await vidFor());
+    const show = (k) => {
+      m.body.innerHTML = '';
+      if (!k) { m.body.appendChild(el('p', 'dim', 'This level has no picture: AREDL has none and its video is unknown.')); return; }
+      const url = picUrl(k);
+      const wrap = el('div', 'pic-view');
+      let media;
+      if (k === 'custom' && customBg.type === 'video') { media = el('video'); media.src = url; media.muted = true; media.loop = true; media.autoplay = true; media.controls = true; }
+      else {
+        media = el('img'); media.alt = name || 'Level picture';
+        media.addEventListener('load', () => { if (picIsAredl(k)) logPic(url, true); });
+        media.addEventListener('error', async () => { // AREDL has none for this level: YouTube's thumbnail instead
+          if (picIsAredl(k)) { logPic(url, false); aredlMissing.add(k.slice(2)); show(await vidFor()); }
+        });
+        media.src = url;
+      }
+      wrap.appendChild(media);
+      m.body.appendChild(wrap);
+      const what = k === 'custom' ? 'Your own backdrop file.' : (picIsAredl(k) ? 'AREDL’s picture of the level.' : 'YouTube’s thumbnail of the level’s video.');
+      m.body.appendChild(el('p', 'dim', what));
+      if (k !== 'custom') { const a = el('a', 'linklike', 'Open the image in the browser'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; m.body.appendChild(a); }
+    };
+    show(key);
+  };
 
   // a one-line question ("Name this list")
   function askName({ title, label, value = '', ok = 'Save' }) {
@@ -257,17 +291,17 @@
   const norm = (t) => String(t || '').toLowerCase();
   function paletteActions() {
     const tabs = [...document.querySelectorAll('.nav-btn[data-tab]')].map(b => ({ id: b.dataset.tab, label: (b.textContent || '').trim() })).filter(t => t.label);
-    const items = tabs.map(t => ({ kind: 'Go to', label: t.label, hint: 'tab', run: () => showTab(t.id) }));
+    const items = tabs.map(t => ({ kind: 'Go to', label: t.label, hint: `Opens the ${t.label} tab`, keys: `open ${t.label} tab`, run: () => showTab(t.id) }));
     items.push(
-      { kind: 'Action', label: 'Pick a level', hint: 'random level with filters', keys: 'random dice roll next what should i play', run: () => fx.openPicker() },
-      { kind: 'Action', label: 'Points what-if', hint: 'points and rank after beating a level', keys: 'rank points calculator if', run: () => fx.openWhatIf() },
-      { kind: 'Action', label: 'Personal list stats', hint: 'charts and yearly recap', keys: 'statistics charts recap', run: () => { showTab('personal'); fx.showStats(true); } },
-      { kind: 'Action', label: 'Sync now', hint: 'with your Google Drive folder', keys: 'google drive sync', run: () => { showTab('settings'); setTimeout(() => { const b = $('#syncNowBtn'); if (b && !b.closest('[hidden]')) b.click(); else showToast('Choose a sync folder in Settings first'); }, 400); } },
-      { kind: 'Action', label: 'Export or import data', hint: 'settings, favourites, lists…', keys: 'backup export import', run: () => { showTab('settings'); setTimeout(() => { const s = $('#settingsSearch'); if (s) { s.value = 'export'; s.dispatchEvent(new Event('input')); } }, 300); } },
-      { kind: 'Action', label: 'Saved filters', hint: 'apply or save a Demon List filter', keys: 'filter preset', run: () => { showTab('list'); setTimeout(() => fx.openFiltersMenu(), 120); } },
+      { kind: 'Action', label: 'Pick a level', hint: 'Rolls a random level to play, using your filters', keys: 'pick a random level to play dice roll next what should i play', run: () => fx.openPicker() },
+      { kind: 'Action', label: 'Points what-if', hint: 'Opens the calculator for points and rank after beating a level', keys: 'open the points what-if calculator rank points calculator if', run: () => fx.openWhatIf() },
+      { kind: 'Action', label: 'Personal list stats', hint: 'Shows charts and the yearly recap of the personal list', keys: 'show your personal list stats statistics charts recap', run: () => { showTab('personal'); fx.showStats(true); } },
+      { kind: 'Action', label: 'Google Drive sync', hint: 'Opens Sync now for the Google Drive folder', keys: 'sync with google drive now google drive sync', run: () => { showTab('settings'); setTimeout(() => { const b = $('#syncNowBtn'); if (b && !b.closest('[hidden]')) b.click(); else showToast('Choose a sync folder in Settings first'); }, 400); } },
+      { kind: 'Action', label: 'Export and import', hint: 'Opens the export and import settings for settings, favourites and lists', keys: 'export or import your data backup export import', run: () => { showTab('settings'); setTimeout(() => { const s = $('#settingsSearch'); if (s) { s.value = 'export'; s.dispatchEvent(new Event('input')); } }, 300); } },
+      { kind: 'Action', label: 'Saved filters', hint: 'Opens the saved filters menu in the Demon List', keys: 'apply or save a demon list filter filter preset', run: () => { showTab('list'); setTimeout(() => fx.openFiltersMenu(), 120); } },
     );
-    (fx.lists || []).forEach(l => items.push({ kind: 'List', label: l.name, hint: plural(l.items.length, 'level'), run: () => fx.openList(l.id) }));
-    (fx.filters || []).forEach(f => items.push({ kind: 'Filter', label: f.name, hint: `${modeLabel(f.mode)} filter`, run: () => { showTab('list'); fx.applySavedFilter(f); } }));
+    (fx.lists || []).forEach(l => items.push({ kind: 'List', label: l.name, hint: `Opens this list · ${plural(l.items.length, 'level')}`, keys: `open the list ${l.name}`, run: () => fx.openList(l.id) }));
+    (fx.filters || []).forEach(f => items.push({ kind: 'Filter', label: f.name, hint: `Applies this filter in the Demon List · ${modeLabel(f.mode)}`, keys: `apply the filter ${f.name}`, run: () => { showTab('list'); fx.applySavedFilter(f); } }));
     return items;
   }
   function paletteSearch(q) {
@@ -285,11 +319,11 @@
       if (!s && /^\d{3,}$/.test(query) && String(l.level_id).startsWith(query)) s = 60;
       if (!s && posQ != null && query.startsWith('#') && l.position === posQ) s = 90;
       if (!s && songLabelOf(l.song) && norm(songLabelOf(l.song)).includes(query)) s = 30;
-      if (s) lv.push({ kind: 'Level', label: l.name, hint: `${l.position != null ? '#' + l.position + ' · ' : ''}${modeLabel(m)}${l.song > 0 && songLabelOf(l.song) ? ' · ♪ ' + songLabelOf(l.song) : ''}`, score: s, run: () => jumpToLevel(l.level_id) });
+      if (s) lv.push({ kind: 'Level', label: l.name, hint: `Opens this level in the Demon List · ${l.position != null ? '#' + l.position + ' · ' : ''}${modeLabel(m)}${s === 30 && l.song > 0 && songLabelOf(l.song) ? ' · ♪ ' + songLabelOf(l.song) : ''}`, score: s, run: () => jumpToLevel(l.level_id) });
     }));
     lv.sort((a, b) => b.score - a.score).slice(0, 8).forEach(x => out.push(x));
     players.rows.filter(p => norm(p.name).includes(query)).sort((a, b) => (norm(a.name).startsWith(query) ? 0 : 1) - (norm(b.name).startsWith(query) ? 0 : 1) || a.rank - b.rank).slice(0, 5)
-      .forEach(p => out.push({ kind: 'Player', label: p.name, hint: `#${p.rank} on the leaderboard`, score: 50, run: () => { showTab('profile'); $('#profileLookup').value = p.id; lookupProfile(p.id); } }));
+      .forEach(p => out.push({ kind: 'Player', label: p.name, hint: `Opens this player’s profile · #${p.rank} on the leaderboard`, score: 50, run: () => { showTab('profile'); $('#profileLookup').value = p.id; lookupProfile(p.id); } }));
     deepSearch(query).forEach(x => out.push(x));
     return out.sort((a, b) => b.score - a.score).slice(0, 40);
   }
@@ -303,11 +337,12 @@
   function deepSearch(q) {
     if (q.length < 2) return [];
     const out = [], seen = new Set();
-    const add = (kind, label, text, run, base = 30, key = null) => {
+    // `label` says what choosing the result does; `ctx` says where it is (the matched text is only used to decide that it matches)
+    const add = (kind, label, text, run, base = 30, key = null, ctx = null) => {
       const t = norm(text);
       if (!t.includes(q)) return;
       const k = key || `${kind}:${label}`; if (seen.has(k)) return; seen.add(k);
-      out.push({ kind, label: label || '(untitled)', hint: snippet(text, q), score: base + (norm(label).includes(q) ? 12 : 0), run });
+      out.push({ kind, label: label || '(untitled)', hint: ctx != null ? ctx : snippet(text, q), score: base + (norm(label).includes(q) ? 12 : 0), run });
     };
     const cap = (n) => { let c = 0; return () => ++c <= n; };
     try { // settings: every option and card
@@ -316,22 +351,26 @@
         if (node.matches('.api-logs .settings-card, .settings-card') && node.querySelector('.setting-line')) return;
         const label = (node.querySelector('.setting-label strong, h3') || {}).textContent || 'Setting', card = node.closest('.settings-card'), cname = card && card.querySelector('h3') ? card.querySelector('h3').textContent : '';
         const text = `${label} ${node.textContent}`;
-        if (norm(text).includes(q) && ok()) add('Setting', label.trim(), text, () => { showTab('settings'); setTimeout(() => { node.scrollIntoView({ block: 'center' }); node.classList.add('fx-flash'); setTimeout(() => node.classList.remove('fx-flash'), 1800); }, 250); }, 28, `set:${cname}:${label}`);
+        if (norm(text).includes(q) && ok()) add('Setting', label.trim(), text, () => { showTab('settings'); setTimeout(() => { node.scrollIntoView({ block: 'center' }); node.classList.add('fx-flash'); setTimeout(() => node.classList.remove('fx-flash'), 1800); }, 250); }, 28, `set:${cname}:${label}`, `Opens this setting · Settings${cname ? ' › ' + cname.trim() : ''}`);
       });
     } catch { /* settings not drawn */ }
-    try { let ok = cap(6); (typeof submissionsData !== 'undefined' ? submissionsData : []).forEach(it => { const text = flat(it); if (norm(text).includes(q) && ok()) add('Submission', subLevelName(it), text, () => { showTab('submissions'); const id = subLevelId(it); if (id != null) jumpToSubmission(id); }, 32, `sub:${subKey(it)}`); }); } catch { /* none */ }
-    try { let ok = cap(6); personalList.forEach((e, i) => { const r = plResolve(e), text = `${r.name} ${flat(e)}`; if (norm(text).includes(q) && ok()) add('Personal', r.name || 'Entry', text, () => { showTab('personal'); fx.showStats(false); setTimeout(() => plOpen(e), 150); }, 32, `pl:${i}`); }); } catch { /* none */ }
-    try { let ok = cap(6); notifAll.forEach((n, i) => { const text = flat(n); if (norm(text).includes(q) && ok()) add('Notification', String(n.title || n.message || n.text || n.type || 'Notification').slice(0, 70), text, () => showTab('notifications'), 30, `n:${i}`); }); } catch { /* none */ }
-    try { let ok = cap(6); changelogEntries.forEach((c, i) => { const text = flat(c); if (norm(text).includes(q) && ok()) add('List changelog', String(describeChange(c, '')).replace(/<[^>]*>/g, '').slice(0, 70) || 'Entry', text, () => showTab('changelog'), 28, `cl:${i}`); }); } catch { /* none */ }
-    try { let ok = cap(6); APP_RELEASES.forEach(r => r.items.forEach(([, t], i) => { if (norm(`${r.title} ${t}`).includes(q) && ok()) add('App changelog', `Version ${r.version}`, `${r.title}. ${t}`, () => { showTab('settings'); setTimeout(() => $('#whatsNewBtn').click(), 250); }, 26, `ac:${r.version}:${i}`); })); } catch { /* none */ }
-    try { let ok = cap(6); state.favourites.forEach(f => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Favourite', f.name || String(f.level_id), text, () => { fx.view = null; showTab('favourites'); renderFavourites(); }, 33, `fav:${f.level_id}`); }); } catch { /* none */ }
-    try { let ok = cap(6); state.following.concat(followNotifs || []).forEach((f, i) => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Followed', f.name || f.level_name || String(f.level_id), text, () => showTab('followed'), 28, `fo:${i}`); }); } catch { /* none */ }
-    try { let ok = cap(6); (fx.lists || []).forEach(l => l.items.forEach(it => { if (norm(it.name).includes(q) && ok()) add('List item', `${it.name}`, `${it.name} in ${l.name}`, () => fx.openList(l.id), 32, `li:${l.id}:${it.level_id}`); })); } catch { /* none */ }
-    try { let ok = cap(8); MODES.forEach(m => levelsOf(m).forEach(l => { const tx = levelText(l); if (tx.hay.includes(q) && !tx.name.includes(q) && ok()) add('Level', l.name, `${l.description || ''} ${(l.tags || []).join(' ')}`, () => jumpToLevel(l.level_id), 24, `lv:${l.level_id}`); })); } catch { /* none */ }
+    try { let ok = cap(6); (typeof submissionsData !== 'undefined' ? submissionsData : []).forEach(it => { const text = flat(it); if (norm(text).includes(q) && ok()) add('Submission', subLevelName(it) || 'A level', text, () => { showTab('submissions'); const id = subLevelId(it); if (id != null) jumpToSubmission(id); }, 32, `sub:${subKey(it)}`, `Opens this submission in Submissions${it && it.status ? ' · ' + String(it.status) : ''}`); }); } catch { /* none */ }
+    try { let ok = cap(6); personalList.forEach((e, i) => { const r = plResolve(e), text = `${r.name} ${flat(e)}`; if (norm(text).includes(q) && ok()) add('Personal', r.name || 'Level', text, () => { showTab('personal'); fx.showStats(false); setTimeout(() => plOpen(e), 150); }, 32, `pl:${i}`, `Opens this entry to edit · Personal list · ${plRunText(e)}`); }); } catch { /* none */ }
+    try { let ok = cap(6); notifAll.forEach((n, i) => { const text = flat(n); if (norm(text).includes(q) && ok()) add('Notification', String(n.title || n.message || n.text || n.type || 'Notification').replace(/\s+/g, ' ').slice(0, 60), text, () => showTab('notifications'), 30, `n:${i}`, 'Opens the Notifications tab'); }); } catch { /* none */ }
+    try { let ok = cap(6); changelogEntries.forEach((c, i) => { const text = flat(c); if (norm(text).includes(q) && ok()) add('List changelog', String(describeChange(c, '')).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').slice(0, 60) || 'Changelog entry', text, () => showTab('changelog'), 28, `cl:${i}`, 'Opens the Demon List changelog'); }); } catch { /* none */ }
+    try { let ok = cap(6); APP_RELEASES.forEach(r => r.items.forEach(([, t, ttl], i) => { if (norm(`${r.title} ${ttl || ''} ${t}`).includes(q) && ok()) add('App changelog', ttl || r.title, `${r.title}. ${ttl || ''} ${t}`, () => { showTab('settings'); setTimeout(() => $('#whatsNewBtn').click(), 250); }, 26, `ac:${r.version}:${i}`, `Opens What’s new · app changelog for version ${r.version}`); })); } catch { /* none */ }
+    try { let ok = cap(6); state.favourites.forEach(f => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Favourite', f.name || String(f.level_id), text, () => { fx.view = null; showTab('favourites'); renderFavourites(); }, 33, `fav:${f.level_id}`, 'Opens the Favourites tab'); }); } catch { /* none */ }
+    try { let ok = cap(6); state.following.concat(followNotifs || []).forEach((f, i) => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Followed', f.name || f.level_name || String(f.level_id), text, () => showTab('followed'), 28, `fo:${f.mode || ''}:${f.level_id != null ? f.level_id : i}`, 'Opens the Followed levels tab'); }); } catch { /* none */ }
+    try { let ok = cap(6); (fx.lists || []).forEach(l => l.items.forEach(it => { if (norm(it.name).includes(q) && ok()) add('List item', it.name, `${it.name} in ${l.name}`, () => fx.openList(l.id), 32, `li:${l.id}:${it.level_id}`, `Opens the list ${l.name}`); })); } catch { /* none */ }
+    try { let ok = cap(8); MODES.forEach(m => levelsOf(m).forEach(l => { const tx = levelText(l); if (tx.hay.includes(q) && !tx.name.includes(q) && ok()) add('Level', l.name, `${l.description || ''} ${(l.tags || []).join(' ')}`, () => jumpToLevel(l.level_id), 24, `lv:${l.level_id}`, `Opens this level · matched in its description or tags · ${l.position != null ? '#' + l.position + ' · ' : ''}${modeLabel(m)}`); })); } catch { /* none */ }
     return out;
   }
-  function openPalette() {
-    if (current && current.isPalette) { current.close(); return; }
+  function openPalette(startQuery) {
+    const start = typeof startQuery === 'string' ? startQuery.trim().slice(0, 120) : '';
+    if (current && current.isPalette) {
+      if (start) { const i = current.body.querySelector('.palette-input'); if (i) { i.value = start; i.dispatchEvent(new Event('input')); i.focus(); } return; }
+      current.close(); return;
+    }
     const m = openModal({ title: 'Command palette' });
     m.isPalette = true; m.box.classList.add('palette'); m.body.classList.add('palette-body');
     const input = el('input', 'fx-input palette-input'); input.type = 'text'; input.placeholder = 'Type a level, player, tab or action…'; input.spellcheck = false; input.setAttribute('aria-label', 'Search');
@@ -359,12 +398,44 @@
       else if (e.key === 'Enter' && items[sel]) { e.preventDefault(); run(items[sel]); }
       else if (e.key === 'Tab' && items.length) { e.preventDefault(); sel = (sel + (e.shiftKey ? -1 : 1) + items.length) % items.length; draw(); } // Tab goes down the options (Shift+Tab up), round again at the ends
     });
-    refresh(); setTimeout(() => input.focus(), 20);
+    if (start) input.value = start;
+    refresh(); setTimeout(() => { input.focus(); if (start) input.select(); }, 20);
     bothLevels().then(() => { if (m.overlay.isConnected) refresh(); });
     loadPlayers().then(() => { if (m.overlay.isConnected && input.value) refresh(); });
   }
   fx.openPalette = openPalette;
   // ---- the key that opens the palette (Settings > Command palette); stored as e.g. "`" or "Mod+k" (Mod = Ctrl, or Cmd on a Mac)
+  // ---- highlighting text offers “Search in command palette” just underneath it ----
+  (function selectionSearch() {
+    let pop = null, timer = 0;
+    const hide = () => { if (pop) { pop.remove(); pop = null; } };
+    const insideOwn = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return !!e && !!e.closest('.sel-pop, .palette, input, textarea, [contenteditable=true]'); };
+    function show() {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().replace(/\s+/g, ' ').trim() : '';
+        if (!sel || sel.isCollapsed || text.length < 2 || insideOwn(sel.anchorNode) || insideOwn(sel.focusNode)) { hide(); return; }
+        const rects = sel.getRangeAt(0).getClientRects(), r = rects.length ? rects[rects.length - 1] : sel.getRangeAt(0).getBoundingClientRect();
+        if (!r || (!r.width && !r.height)) { hide(); return; }
+        hide();
+        pop = el('div', 'sel-pop'); pop.setAttribute('role', 'menu');
+        const b = el('button', 'sel-pop-btn', 'Search in command palette'); b.type = 'button'; b.setAttribute('role', 'menuitem');
+        b.addEventListener('mousedown', (e) => e.preventDefault()); // keeps the highlight until it is used
+        b.addEventListener('click', () => { const q = text.slice(0, 120); hide(); sel.removeAllRanges(); openPalette(q); });
+        pop.appendChild(b); document.body.appendChild(pop);
+        const w = pop.offsetWidth, h = pop.offsetHeight;
+        pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+        pop.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - h - 8)) + 'px';
+      }, 60);
+    }
+    document.addEventListener('mouseup', (e) => { if (e.target.closest && e.target.closest('.sel-pop')) return; show(); });
+    document.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') show(); });
+    document.addEventListener('mousedown', (e) => { if (!(e.target.closest && e.target.closest('.sel-pop'))) hide(); }, true);
+    document.addEventListener('scroll', hide, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+    window.addEventListener('blur', hide); window.addEventListener('resize', hide);
+  })();
   const DEFAULT_PALETTE_KEY = '`';
   const paletteKey = () => (typeof appSettings.paletteKey === 'string' && appSettings.paletteKey ? appSettings.paletteKey : DEFAULT_PALETTE_KEY);
   const isMac = window.aredl && window.aredl.platform === 'darwin';
@@ -946,6 +1017,41 @@
     MODES.forEach(m => levelsOf(m).forEach(l => { if (String(l.song) === String(songId) && String(l.level_id) !== String(thisLevelId)) n++; }));
     return n;
   };
+  // Clicking a song ID: the other levels that use the song (both lists), a button to copy the ID, and one to filter the list by it
+  fx.openSongLevels = async function (songId, thisLevelId) {
+    const id = String(songId);
+    const m = openModal({ title: 'Song ' + id });
+    const name = songLabelOf(Number(id));
+    const head = el('div', 'fx-row');
+    head.appendChild(el('span', 'fx-count', name ? `♪ ${name}` : `Song ID ${id}`));
+    const copy = el('button', 'btn btn-ghost small-btn', 'Copy ID'); copy.type = 'button';
+    copy.addEventListener('click', () => copyText(id, 'Song ID'));
+    head.appendChild(copy);
+    m.body.appendChild(head);
+    const box = el('div', 'fx-note', 'Loading the lists…'); m.body.appendChild(box);
+    await bothLevels();
+    if (!m.overlay.isConnected) return;
+    const rows = [];
+    MODES.forEach(md => levelsOf(md).forEach(l => { if (String(l.song) === id && String(l.level_id) !== String(thisLevelId)) rows.push({ l, md }); }));
+    rows.sort((a, b) => (a.l.position ?? 1e9) - (b.l.position ?? 1e9) || (a.md < b.md ? -1 : 1));
+    box.remove();
+    if (!rows.length) { m.body.appendChild(el('div', 'fx-note', 'No other level on the lists uses this song.')); return; }
+    m.body.appendChild(el('div', 'fx-count', `${plural(rows.length, 'other level')} with this song`));
+    const list = el('div', 'fx-list');
+    rows.forEach(({ l, md }) => {
+      const r = el('button', 'fx-listrow'); r.type = 'button'; r.style.cursor = 'pointer'; r.style.textAlign = 'left'; r.style.color = 'inherit'; r.style.font = 'inherit';
+      r.appendChild(el('span', 'fx-pick-pos', l.position != null ? `#${l.position}` : (levelStatusLabel(l) || '—')));
+      r.appendChild(el('span', 'fx-pick-name', l.name));
+      const where = el('span', 'dim', modeLabel(md)); where.style.marginLeft = 'auto'; r.appendChild(where);
+      r.addEventListener('click', () => { m.close(); jumpToLevel(l.level_id, md); });
+      list.appendChild(r);
+    });
+    m.body.appendChild(list);
+    const foot = el('div', 'fx-row');
+    const show = el('button', 'btn btn-ghost small-btn', 'Show them in the Demon List'); show.type = 'button';
+    show.addEventListener('click', () => { m.close(); fx.showSongLevels(Number(id)); });
+    foot.appendChild(show); m.body.appendChild(foot);
+  };
   fx.showSongLevels = async function (songId) {
     const counts = MODES.map(m => ({ m, n: levelsOf(m).filter(l => String(l.song) === String(songId)).length }));
     const best = counts.find(c => c.m === tabModes.list && c.n) || counts.slice().sort((a, b) => b.n - a.n)[0];
@@ -963,9 +1069,9 @@
   const rerenderSongViews = () => { try { refreshSongStats(); } catch { /* not ready */ } try { applyFilters(); } catch { /* list not ready */ } try { renderFavourites(); } catch { /* not ready */ } };
   function songInfoText() {
     const ids = distinctSongIds();
-    if (!ids.length) return 'Finds the names of all songs on the lists, about one per second so Newgrounds isn’t hammered. It runs in the background and you can stop it any time. (Open the Demon List first so the lists are loaded.)';
+    if (!ids.length) return 'Finds the names of all songs on the lists, about one per second so the game server isn’t hammered. It runs in the background and you can stop it any time. (Open the Demon List first so the lists are loaded.)';
     const known = ids.filter(id => songNames.has(String(id))).length;
-    return `${known} of ${ids.length} song names are known. “Look up all song names” finds the rest, about one per second so Newgrounds isn’t hammered. It runs in the background and you can stop it any time.`;
+    return `${known} of ${ids.length} song names are known. “Look up all song names” finds the rest, about one per second so the game server isn’t hammered. It runs in the background and you can stop it any time.`;
   }
   function wireSongSettings() {
     const toggle = $('#showSongNames'), bulk = $('#songBulkBtn'), stop = $('#songBulkStopBtn'), info = $('#songBulkInfo');
@@ -1031,14 +1137,29 @@
   }
   // the two timing dropdowns (shown once a folder is connected); linked = the check time follows the save time
   async function refreshSyncTiming(show) {
-    for (const id of ['syncTimingSep', 'syncSaveLine', 'syncCheckLine', 'syncLinkLine']) $('#' + id).hidden = !show;
-    if (!show) return;
+    for (const id of ['syncTimingSep', 'syncSaveLine', 'syncCheckLine', 'syncLinkLine', 'syncTimerLine']) $('#' + id).hidden = !show;
+    if (!show) { clearInterval(syncClock); syncClock = null; return; }
     let iv; try { iv = await window.aredl.syncGetIntervals(); } catch { return; }
+    syncTimes = { saveAt: iv.nextSave ? Date.now() + (iv.nextSave - iv.now) : null, checkAt: iv.nextCheck ? Date.now() + (iv.nextCheck - iv.now) : null, linked: iv.linked, pending: iv.pending, save: iv.save, check: iv.check };
+    drawSyncClock();
+    if (!syncClock) syncClock = setInterval(() => { if (document.getElementById('tab-settings').classList.contains('active')) drawSyncClock(); }, 1000);
     $('#syncSaveSelect').value = String(iv.save);
     $('#syncCheckSelect').value = String(iv.linked ? iv.save : iv.check);
     $('#syncLinked').checked = iv.linked;
     setSelectDisabled($('#syncCheckSelect'), iv.linked);
     $('#syncCheckLine').classList.toggle('muted', iv.linked);
+  }
+  // a live countdown to the next save and the next check
+  let syncClock = null, syncTimes = null;
+  function drawSyncClock() {
+    const t = syncTimes, box = $('#syncTimerText');
+    if (!t || !box) return;
+    const left = (at) => { const ms = Math.max(0, at - Date.now()), m = Math.floor(ms / 60000), sec = Math.floor(ms / 1000) % 60; return `${m}:${String(sec).padStart(2, '0')}`; };
+    const save = t.saveAt ? `next save in ${left(t.saveAt)}${t.pending ? ' (changes are waiting to be saved)' : ' (nothing to save right now)'}` : 'saves when the app closes';
+    const check = t.checkAt ? `next check in ${left(t.checkAt)}` : 'checks when the app starts';
+    box.textContent = t.linked ? (t.saveAt ? `Save and check together: ${left(t.saveAt)} until the next run${t.pending ? ' (changes are waiting to be saved)' : ' (nothing to save right now)'}.` : 'Nothing runs on a timer; the app saves when it closes.') : `${save[0].toUpperCase() + save.slice(1)}; ${check}.`;
+    if (t.saveAt && Date.now() > t.saveAt + 1500) { syncTimes = null; refreshSyncTiming(true); } // a run happened: ask for the new times
+    else if (t.checkAt && Date.now() > t.checkAt + 1500) { syncTimes = null; refreshSyncTiming(true); }
   }
   async function saveSyncTiming(from) {
     const linked = $('#syncLinked').checked;
@@ -1159,6 +1280,21 @@
         const d = describeSync(res); syncResultBox('ok', d.title, d.lines); refreshSync();
       } catch (err) { syncResultBox('error', `The sync failed: ${errMsg(err)}`); } finally { btn.disabled = false; }
     };
+    function renderSyncChanges(box, res) {
+      box.innerHTML = '';
+      if (!res || !res.ok) { box.appendChild(el('p', 'dim', (res && res.error) || 'Couldn’t compare.')); return; }
+      if (!res.parts.length) { box.appendChild(el('p', 'dim', 'This app and the folder’s save are the same. Nothing would change.')); return; }
+      const cap = (arr) => arr.slice(0, 10).join(', ') + (arr.length > 10 ? ` and ${arr.length - 10} more` : '');
+      for (const p of res.parts) {
+        const card = el('div', 'sync-change');
+        card.appendChild(el('strong', null, p.label));
+        if (p.folderHasNone) card.appendChild(el('div', 'fx-hint', 'The folder has nothing for this yet.'));
+        if (p.onlyHere.length) card.appendChild(el('div', 'fx-hint', `Only in this app (${p.onlyHere.length}): ${cap(p.onlyHere)}. “Save” adds ${p.onlyHere.length === 1 ? 'it' : 'them'} to the folder; “Use the folder’s save” removes ${p.onlyHere.length === 1 ? 'it' : 'them'} here.`));
+        if (p.onlyFolder.length) card.appendChild(el('div', 'fx-hint', `Only in the folder (${p.onlyFolder.length}): ${cap(p.onlyFolder)}. “Use the folder’s save” brings ${p.onlyFolder.length === 1 ? 'it' : 'them'} here; “Save” removes ${p.onlyFolder.length === 1 ? 'it' : 'them'} from the folder.`));
+        if (p.changed) card.appendChild(el('div', 'fx-hint', `Different in both (${p.changed})${p.changedNames && p.changedNames.length ? ': ' + cap(p.changedNames) : ''}. The side you choose wins.`));
+        box.appendChild(card);
+      }
+    }
     // Sync now: asks whether to save this app to the folder, or to use the folder's save to overwrite this app
     $('#syncNowBtn').addEventListener('click', async () => {
       const st = await window.aredl.syncStatus().catch(() => null);
@@ -1171,6 +1307,14 @@
       const row = el('div', 'fx-row');
       const save = el('button', 'btn small-btn', 'Save this app to the folder'), use = el('button', 'btn btn-ghost small-btn', 'Use the folder’s save'), cancel = el('button', 'btn btn-ghost small-btn', 'Cancel');
       use.disabled = !has; row.append(save, use, cancel); m.body.appendChild(row);
+      // what would change, before choosing: a list of every difference between this app and the folder's save (nothing is applied)
+      const listBtn = el('button', 'btn btn-ghost small-btn', 'List the changes'), changes = el('div', 'sync-changes');
+      listBtn.addEventListener('click', async () => {
+        listBtn.disabled = true; listBtn.textContent = 'Comparing…'; changes.innerHTML = '';
+        try { renderSyncChanges(changes, await window.aredl.syncPreview()); } catch (err) { changes.appendChild(el('p', 'dim', `Couldn’t compare (${errMsg(err)}).`)); }
+        listBtn.disabled = false; listBtn.textContent = 'List the changes again';
+      });
+      m.body.append(listBtn, changes);
       m.body.appendChild(el('div', 'fx-note small', has ? 'Saving replaces the folder’s save with this app’s data. Using the folder’s save replaces this app’s data with it, and the app reloads.' : 'Saving creates the save in the folder. Using the folder’s save is available once it exists.'));
       save.addEventListener('click', () => { m.close(); runSync('save'); });
       use.addEventListener('click', () => { m.close(); runSync('load'); });
@@ -1201,7 +1345,9 @@
       try { await refreshLevelData(); lv.st.textContent = `Done at ${new Date().toLocaleTimeString()}.`; } catch (err) { lv.st.textContent = `Couldn’t refresh (${errMsg(err)}).`; }
       lv.btn.disabled = false; lv.btn.textContent = 'Refresh';
     });
-    const sg = row('Song info', 'Looks up the selected level’s song again, then finds names for songs that are still unknown (about one a second). Level info is left alone.');
+    const pc = row('Level pictures', 'Loads AREDL’s level pictures again, including levels that had none last time. The app keeps a picture after loading it once, so this is only needed when AREDL has added or changed pictures.');
+    pc.btn.addEventListener('click', () => { refreshAredlPictures(); pc.st.textContent = `Done at ${new Date().toLocaleTimeString()}.`; });
+    const sg = row('Song info', 'Looks up the selected level’s song again, then finds names for songs that are still unknown (about one a second; the game server is asked first and Newgrounds only if it has no answer). Level info is left alone.');
     const stopBtn = el('button', 'btn btn-ghost small-btn', 'Stop'); stopBtn.hidden = true; sg.btn.parentNode.appendChild(stopBtn);
     stopBtn.addEventListener('click', () => { stopBtn.disabled = true; stopBtn.textContent = 'Stopping…'; window.aredl.songBulkStop(); });
     const onProg = (p) => {

@@ -15,9 +15,9 @@
   };
 
   function releaseHtml(r) {
-    const items = r.items.map(([type, text]) =>
-      `<li><span class="wn-tag wn-${escapeHtml(type)}">${escapeHtml(TYPE_LABEL[type] || type)}</span><span>${escapeHtml(text)}</span></li>`).join('');
-    return `<section class="wn-release"><h4>Version ${escapeHtml(r.version)}${r.date ? ` <small class="wn-date">${escapeHtml(new Date(r.date + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }))}</small>` : ''}${r.title ? ` <small>${escapeHtml(r.title)}</small>` : ''}</h4><ul class="wn-list">${items}</ul></section>`;
+    const items = r.items.map(([type, text, title]) =>
+      `<li><span class="wn-tag wn-${escapeHtml(type)}">${escapeHtml(TYPE_LABEL[type] || type)}</span><span>${title ? `<strong class="wn-title">${escapeHtml(title)}</strong> ` : ''}${escapeHtml(text)}</span></li>`).join('');
+    return `<section class="wn-release"><h4>Version ${escapeHtml(r.version)}${/^\d{2}-\d{2}-\d{4}$/.test(r.date || '') ? ` <small class="wn-date">${escapeHtml(r.date)}</small>` : ''}${r.title ? ` <small>${escapeHtml(r.title)}</small>` : ''}</h4><ul class="wn-list">${items}</ul></section>`;
   }
 
   function setOpen(open) {

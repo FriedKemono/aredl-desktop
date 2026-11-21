@@ -56,7 +56,10 @@ const SPEC = {
   shaderSpeed:     { label: 'Shader speed',            check: int(0, 1000) },
   shaderIntensity: { label: 'Shader intensity',        check: int(10, 200) },
   // behaviour
+  listThumbs:      { label: 'Level pictures in the list', check: bool },
   bgSource:        { label: 'Level picture source',    check: oneOf('youtube', 'aredl') },
+  bgCustomOn:      { label: 'Custom backdrop in use',  check: bool },
+  pickFilter:      { label: 'Pick a level filters',    check: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? cleanJson(v) : undefined) },
   startTab:        { label: 'Start-up tab',            check: oneOf('list', 'favourites', 'followed', 'personal', 'changelog', 'leaderboard', 'packs', 'profile', 'submissions', 'notifications') },
   videoOnLeave:    { label: 'Videos when you leave',   check: oneOf('popup', 'background', 'pause', 'stop') },
   miniPlayer:      { label: 'Corner player size',      check: (v) => (v && typeof v === 'object' && Number.isFinite(v.width) ? { x: null, y: null, width: Math.min(900, Math.max(220, Math.round(v.width))) } : undefined) }, // its position depends on the screen, so only the size travels
@@ -83,6 +86,17 @@ const SPEC = {
 };
 // (The few settings that are only bookkeeping - "have I shown this tip" - are deliberately not in the list.)
 
+// A custom backdrop file small enough to travel inside the Google Drive save file (the folder only holds one text file
+// per API key, so the picture is carried as base64). Bigger files stay on the computer they were chosen on.
+const BACKDROP_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.bmp', '.mp4', '.m4v', '.webm', '.mov', '.ogv'];
+const MAX_SYNC_BACKDROP = 8 * 1024 * 1024; // bytes of the file itself
+function cleanBackdropFile(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const ext = typeof v.ext === 'string' ? v.ext.toLowerCase() : '';
+  if (!BACKDROP_EXTS.includes(ext) || typeof v.data !== 'string' || !v.data || v.data.length > Math.ceil(MAX_SYNC_BACKDROP * 4 / 3) + 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(v.data)) return undefined;
+  return { ext, name: typeof v.name === 'string' ? v.name.slice(0, 120) : '', data: v.data };
+}
+
 const KEYS = Object.keys(SPEC);
 const label = (k) => (SPEC[k] ? SPEC[k].label : k);
 
@@ -90,7 +104,7 @@ const label = (k) => (SPEC[k] ? SPEC[k].label : k);
 // The parts of an export, what each one is made of, and how its entries are cleaned
 // ---------------------------------------------------------------------------
 const SECTIONS = [
-  { id: 'settings',      label: 'Settings',              noun: ['setting', 'settings'],       about: 'theme, backdrop, top bar, videos and so on' },
+  { id: 'settings',      label: 'Settings',              noun: ['setting', 'settings'],       about: 'theme, backdrop, shader, top bar, videos and so on' },
   { id: 'favourites',    label: 'Favourites',            noun: ['level', 'levels'],           about: 'your favourited levels' },
   { id: 'lists',         label: 'Custom lists',          noun: ['list', 'lists'],             about: 'your own named lists of levels' },
   { id: 'following',     label: 'Followed levels',       noun: ['level', 'levels'],           about: 'the levels you follow, and the update notices they produced' },
@@ -340,4 +354,4 @@ function combine(kind, localRaw, incoming, mode) {
   return { list, added: added.length, kept: incoming.length - added.length };
 }
 
-module.exports = { SPEC, KEYS, SECTIONS, SECTION_IDS, LIST_SECTIONS, FORMAT, PREFIX, TransferError, countSources, buildExport, toJson, toText, parseTransfer, planImport, describePlan, combine, cleanList, cleanJson, label };
+module.exports = { SPEC, KEYS, SECTIONS, SECTION_IDS, LIST_SECTIONS, FORMAT, PREFIX, TransferError, countSources, buildExport, toJson, toText, parseTransfer, planImport, describePlan, combine, cleanList, cleanJson, label, cleanBackdropFile, BACKDROP_EXTS, MAX_SYNC_BACKDROP, ITEM_KEY: KEY };

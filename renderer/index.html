@@ -283,6 +283,7 @@
       </div>
       <div class="lb-scroll"><div class="lb-table" id="lbTable"></div></div>
       <div class="lb-pager" id="lbPager"></div>
+      <div id="lbRawZone" class="debug-info"></div>
     </section>
 
     <section class="tab" id="tab-packs">
@@ -301,6 +302,7 @@
       </div>
       <div id="packsState" class="state"></div>
       <div id="packsList"></div>
+      <div id="packsRawZone" class="debug-info"></div>
     </section>
 
     <section class="tab" id="tab-changelog">
@@ -517,11 +519,15 @@
             </select>
           </div>
           <div class="setting-line" id="bgCustomLine" hidden>
-            <div class="setting-label"><strong>Backdrop file</strong><small id="bgCustomName">No file chosen. Images, GIFs and videos work; videos play silently on a loop. The shader still takes its colours from it.</small></div>
+            <div class="setting-label"><strong>Backdrop file</strong><small id="bgCustomName">No file chosen. Images, GIFs and videos work; videos play silently on a loop. The shader still takes its colours from it. A file of 8 MB or less is included in Google Drive sync.</small></div>
             <div class="toggle-stack">
               <button class="btn btn-ghost small-btn" id="bgCustomPick">Choose file…</button>
               <button class="btn btn-ghost small-btn" id="bgCustomClear" hidden>Remove file</button>
             </div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Pictures in the Demon List</strong><small>Shows AREDL’s picture of each level behind its row in the list. Only the rows on screen load a picture, and a level AREDL has no picture for keeps its plain row.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="listThumbsToggle"> Show level pictures in the list</label>
           </div>
           <div class="setting-line">
             <div class="setting-label"><strong>Picture overwrites</strong><small id="thumbOverrideNote">Levels set to a different picture than the one chosen above.</small></div>
@@ -741,6 +747,9 @@
             <div class="setting-label"><strong>Same time for both</strong><small>Saving and checking use the save time above, in one request.</small></div>
             <label class="checkbox-wrap"><input type="checkbox" id="syncLinked"> Link them</label>
           </div>
+          <div class="setting-line" id="syncTimerLine" hidden>
+            <div class="setting-label"><strong>Timers</strong><small id="syncTimerText">…</small></div>
+          </div>
           <div class="setting-line" id="syncResultLine" hidden>
             <div class="transfer-result" id="syncResult" role="status" aria-live="polite"></div>
           </div>
@@ -754,7 +763,7 @@
             <label class="checkbox-wrap"><input type="checkbox" id="showSongNames"> Show song names</label>
           </div>
           <div class="setting-line">
-            <div class="setting-label"><strong>Look up the rest</strong><small id="songBulkInfo">Finds the names of all songs on the lists, about one per second so Newgrounds isn’t hammered. It runs in the background and you can stop it any time.</small></div>
+            <div class="setting-label"><strong>Look up the rest</strong><small id="songBulkInfo">Finds the names of all songs on the lists, about one per second so the game server isn’t hammered. It runs in the background and you can stop it any time.</small></div>
             <div class="transfer-btns">
               <button class="btn btn-ghost small-btn" id="songBulkBtn">Look up all song names</button>
               <button class="btn btn-ghost small-btn" id="songBulkStopBtn" hidden>Stop</button>

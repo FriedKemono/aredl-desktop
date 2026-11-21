@@ -488,6 +488,12 @@ function createWindow() {
       mainWindow.hide();
     }
   });
+  // a video that is playing carries on in the floating player while the app is minimised or tucked away, and comes back when the app does
+  const tell = (name) => { if (!app.isQuiting && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(name); };
+  mainWindow.on('minimize', () => tell('win:away'));
+  mainWindow.on('hide', () => tell('win:away'));
+  mainWindow.on('restore', () => tell('win:back'));
+  mainWindow.on('show', () => tell('win:back'));
 }
 
 function createTray() {
@@ -652,11 +658,12 @@ const songInflight = new Map();
 async function lookupSong(id, force = false) {
   const cache = loadSongCache();
   if (cache[id] && !force) return { ok: true, id, ...cache[id] };
-  const gdP = fetchGdSong(id).catch(() => ({}));
-  let ng = {}, ngErr = null;
-  try { ng = await fetchNewgroundsSong(id); } catch (err) { ngErr = err; }
-  let name = ng.name, artist = ng.artist;
-  if (!name || !artist) { const gd = await gdP; name = name || gd.name; artist = artist || gd.artist; }
+  // the game server (boomlings) is asked first; Newgrounds is only asked when it had no answer
+  let name = '', artist = '', ngErr = null;
+  try { const gd = await fetchGdSong(id); name = gd.name; artist = gd.artist; } catch { /* no answer from the game server */ }
+  if (!name) {
+    try { const ng = await fetchNewgroundsSong(id); name = ng.name; artist = ng.artist; } catch (err) { ngErr = err; }
+  }
   if (!name) {
     if (cache[id]) return { ok: true, id, ...cache[id] }; // asked again and couldn't: the earlier answer still stands
     return { ok: false, id, error: ngErr ? ngErr.message : 'Song not found' };
@@ -710,9 +717,25 @@ const TRANSFER_FILES = {
 const FILES_OF = { // which files each part of an import touches
   settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], demonlist: ['demonlist'], following: ['following', 'followNotifications'], personal: ['personal'], notifications: ['notifications'],
 };
+// a custom backdrop small enough to ride along inside the Google Drive save file (see settings-transfer.js)
+function backdropForSync() {
+  try {
+    const f = customBgFile();
+    if (!f || !fs.existsSync(f) || fs.statSync(f).size > transfer.MAX_SYNC_BACKDROP) return undefined;
+    return { ext: path.extname(f), name: String(loadSettings().bgCustomName || '').slice(0, 120), data: fs.readFileSync(f).toString('base64') };
+  } catch { return undefined; }
+}
+function applySyncedBackdrop(bg) { // the file from the save file becomes this computer's custom backdrop (left alone when identical)
+  const dir = app.getPath('userData'), target = path.join(dir, `custom-bg${bg.ext}`), bytes = Buffer.from(bg.data, 'base64');
+  const same = (() => { try { return fs.existsSync(target) && fs.readFileSync(target).equals(bytes); } catch { return false; } })();
+  if (same) return { bgCustomExt: bg.ext, bgCustomName: bg.name };
+  for (const e of Object.keys(BG_TYPES)) fs.rmSync(path.join(dir, `custom-bg${e}`), { force: true });
+  fs.writeFileSync(target, bytes);
+  return { bgCustomExt: bg.ext, bgCustomName: bg.name, bgCustomVer: Date.now() };
+}
 function gatherTransferSources() {
   return {
-    settings: loadSettings(),
+    settings: { ...loadSettings(), bgCustomFile: backdropForSync() },
     favourites: readList(TRANSFER_FILES.favourites()),
     customLists: readList(TRANSFER_FILES.lists()),
     savedFilters: readList(TRANSFER_FILES.filters()),
@@ -913,7 +936,12 @@ const syncer = createSync({
     source: gatherTransferSources,
     mtime: (id) => Math.max(0, ...(SYNC_FILES_OF[id] || []).map(k => { try { return fs.statSync(TRANSFER_FILES[k]()).mtimeMs; } catch { return 0; } })),
     apply: (id, payload) => {
-      if (id === 'settings') writeJson(settingsPath(), { ...loadSettings(), ...payload });
+      if (id === 'settings') {
+        const { bgCustomFile, ...rest } = payload;
+        let file = {};
+        if (bgCustomFile) { try { file = applySyncedBackdrop(bgCustomFile); } catch (err) { console.warn('Custom backdrop from the save file could not be written:', err.message); } }
+        writeJson(settingsPath(), { ...loadSettings(), ...rest, ...file });
+      }
       else if (id === 'following') { writeJson(TRANSFER_FILES.following(), payload.following); writeJson(TRANSFER_FILES.followNotifications(), payload.notices); }
       else writeJson(TRANSFER_FILES[id](), payload);
     },
@@ -965,6 +993,12 @@ ipcMain.handle('sync:setParts', async (_e, parts) => syncer.setParts(parts));
 ipcMain.handle('sync:disconnect', async () => { drive.disconnect(); return syncer.disconnect(); });
 // choice: 'save' = this app's data replaces the folder's; 'load' = the folder's data replaces this app's
 // choice: 'save' = this app's data replaces the folder's save; 'load' = the folder's save replaces this app's data
+ipcMain.handle('sync:preview', async () => { // what differs between this app and the folder's save; nothing is changed
+  try {
+    if (drive.active() && syncFileName()) { try { await drive.pull(); } catch (err) { return { ok: false, error: `Google Drive: ${err.message}` }; } }
+    return syncer.preview();
+  } catch (err) { return { ok: false, error: `Couldn’t compare: ${err.message}` }; }
+});
 ipcMain.handle('sync:now', async (_e, choice) => {
   if (choice !== 'save' && choice !== 'load') return { ok: false, error: 'Choose whether to save to the folder or to use its save.' };
   const first = !syncer.status().lastSyncAt;
@@ -1020,14 +1054,23 @@ async function confirmBigChange() {
   return answer;
 }
 let syncTimers = [];
+const syncNext = { save: null, check: null }; // when each timer runs next (shown as a countdown in Settings)
 function startSyncTimer() {
   syncTimers.forEach(clearInterval); syncTimers = [];
+  syncNext.save = syncNext.check = null;
   const { save, check, linked } = syncIntervals();
-  if (linked) { if (save) syncTimers.push(setInterval(() => backgroundSync('both'), save * 60000)); return; }
-  if (save) syncTimers.push(setInterval(() => backgroundSync('save'), save * 60000));
-  if (check) syncTimers.push(setInterval(() => backgroundSync('check'), check * 60000));
+  const every = (key, mins, kind) => {
+    syncNext[key] = Date.now() + mins * 60000;
+    syncTimers.push(setInterval(() => { syncNext[key] = Date.now() + mins * 60000; backgroundSync(kind); }, mins * 60000));
+  };
+  if (linked) { if (save) { every('save', save, 'both'); syncNext.check = syncNext.save; syncTimers.push(setInterval(() => { syncNext.check = syncNext.save; }, 1000)); } return; }
+  if (save) every('save', save, 'save');
+  if (check) every('check', check, 'check');
 }
-ipcMain.handle('sync:getIntervals', async () => ({ ...syncIntervals(), options: SYNC_MINUTES }));
+ipcMain.handle('sync:getIntervals', async () => {
+  let pending = false; try { pending = syncer.hasLocalChanges(); } catch { /* not connected */ }
+  return { ...syncIntervals(), options: SYNC_MINUTES, nextSave: syncNext.save, nextCheck: syncNext.check, pending, now: Date.now() };
+});
 ipcMain.handle('sync:setIntervals', async (_e, v) => {
   const ok = (x) => SYNC_MINUTES.includes(x), cur = syncIntervals();
   const patch = { syncSaveMins: ok(v && v.save) ? v.save : cur.save, syncLinked: !(v && v.linked === false), syncCheckMins: ok(v && v.check) ? v.check : cur.check };
@@ -1108,6 +1151,11 @@ ipcMain.handle('api:getLevelRecords', async (_e, levelId, mode) => {
 ipcMain.handle('api:getSubmissionQueue', async (_e, submissionId, mode) => apiFetch(ENDPOINTS.submissionQueue(submissionId, mode), { requireAuth: true }));
 
 ipcMain.handle('api:getRequestLog', async () => requestLog);
+// the page loads AREDL's level pictures itself (from the public thumbnails repository); each first load is written to the log
+ipcMain.on('log:pic', (_e, url, ok) => {
+  if (typeof url !== 'string' || !url.startsWith('https://raw.githubusercontent.com/All-Rated-Extreme-Demon-List/Thumbnails/') || url.length > 300) return;
+  logRequest({ kind: 'misc', what: 'AREDL level picture', url, status: ok ? 200 : 404, ok: true, timestamp: Date.now() });
+});
 
 ipcMain.handle('api:getSubmissions', async (_e, mode) => apiFetch(ENDPOINTS.submissions(mode), { requireAuth: true }));
 
@@ -1317,61 +1365,74 @@ app.on('window-all-closed', () => {
 // minimised, and has no button of its own in the taskbar.
 // ---------------------------------------------------------------------------
 let miniWin = null, miniInit = null, miniWidth = 0;
+const MINI_PAD = 28;             // room around the player inside its window: the corner grips and the shadow are drawn there (it is see-through)
+const MINI_MIN = 220, MINI_MAX = 900; // the same limits as the corner player's width
 const clampNum = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
-function closeMiniWindow() { if (miniWin && !miniWin.isDestroyed()) miniWin.destroy(); miniWin = null; }
+function closeMiniWindow() { const w = miniWin; miniWin = null; if (w && !w.isDestroyed()) w.destroy(); } // miniWin is cleared first so its 'closed' event isn't taken for the person closing it
 function openMiniWindow(o) {
   closeMiniWindow();
   if (!o || typeof o.vid !== 'string' || !/^[\w-]{6,20}$/.test(o.vid)) return false;
-  const w = clampNum(Math.round(Number(miniWidth || o.width) || 340), 240, 1280), h = Math.round(w * 9 / 16);
-  const pt = { x: Math.round(Number(o.screenX) || 0), y: Math.round(Number(o.screenY) || 0) };
-  const wa = screen.getDisplayNearestPoint(pt).workArea;
-  const x = clampNum(pt.x, wa.x, wa.x + wa.width - w), y = clampNum(pt.y, wa.y, wa.y + wa.height - h);
+  const w = clampNum(Math.round(Number(miniWidth || o.width) || 340), MINI_MIN, MINI_MAX), h = Math.round(w * 9 / 16);
+  const W = w + MINI_PAD * 2, H = h + MINI_PAD * 2;
+  let pt;
+  if (o.auto && mainWindow && !mainWindow.isDestroyed()) { // app minimised or hidden: it goes to the bottom-right of the screen the app was on
+    const wa = screen.getDisplayMatching(mainWindow.getBounds()).workArea;
+    pt = { x: wa.x + wa.width - w - 16 - MINI_PAD, y: wa.y + wa.height - h - 16 - MINI_PAD };
+  } else pt = { x: Math.round(Number(o.screenX) || 0) - MINI_PAD, y: Math.round(Number(o.screenY) || 0) - MINI_PAD };
+  const wa = screen.getDisplayNearestPoint({ x: pt.x + MINI_PAD, y: pt.y + MINI_PAD }).workArea;
+  const x = clampNum(pt.x, wa.x - MINI_PAD, wa.x + wa.width - W + MINI_PAD), y = clampNum(pt.y, wa.y - MINI_PAD, wa.y + wa.height - H + MINI_PAD);
+  miniWidth = w;
   miniInit = {
-    vid: o.vid, time: Number(o.time) || 0, playing: !!o.playing, title: String(o.title || '').slice(0, 300),
+    vid: o.vid, time: Number(o.time) || 0, playing: !!o.playing, title: String(o.title || '').slice(0, 300), pad: MINI_PAD,
     rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000),
   };
   miniWin = new BrowserWindow({
-    width: w, height: h, x, y, minWidth: 240, minHeight: 135, show: false,
-    frame: false, resizable: true, minimizable: false, maximizable: false, fullscreenable: false,
-    skipTaskbar: true, alwaysOnTop: true, hasShadow: true, backgroundColor: '#000000', title: 'AREDL Desktop',
+    width: W, height: H, x, y, show: false, transparent: true, backgroundColor: '#00000000',
+    frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, hasShadow: false,
+    skipTaskbar: true, alwaysOnTop: true, title: 'AREDL Desktop',
     webPreferences: { preload: path.join(__dirname, 'mini-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
   const win = miniWin;
   win.setAlwaysOnTop(true, 'screen-saver'); // above full-screen windows and other apps
   win.setSkipTaskbar(true);
-  win.setAspectRatio(16 / 9);
   if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true); // on every desktop (without hiding the Dock icon)
   win.setMenuBarVisibility(false);
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.on('resize', () => { if (!win.isDestroyed()) miniWidth = win.getSize()[0]; });
   win.on('closed', () => {
     if (miniWin === win) { miniWin = null; if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed'); }
   });
   win.loadURL(`http://127.0.0.1:${localServerPort}/mini.html`);
   return true;
 }
+const fromMini = (e) => !!miniWin && !miniWin.isDestroyed() && e.sender === miniWin.webContents;
 ipcMain.handle('mini:open', async (_e, o) => openMiniWindow(o));
 ipcMain.on('mini:ready', (e) => {
-  if (miniWin && !miniWin.isDestroyed() && e.sender === miniWin.webContents && miniInit) {
+  if (fromMini(e) && miniInit) {
     miniWin.webContents.send('mini:init', miniInit);
     miniWin.showInactive(); // appears without taking the keyboard from what you were doing
     miniWin.setAlwaysOnTop(true, 'screen-saver');
   }
 });
-ipcMain.on('mini:move', (e, x, y) => {
-  if (!miniWin || miniWin.isDestroyed() || e.sender !== miniWin.webContents) return;
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+ipcMain.on('mini:move', (e, x, y) => { // dragged by its top bar
+  if (!fromMini(e) || !Number.isFinite(x) || !Number.isFinite(y)) return;
   const [w, h] = miniWin.getSize();
   miniWin.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h });
 });
+ipcMain.on('mini:resize', (e, b) => { // resized from a corner or edge: the player's own rectangle (the window is that plus the room around it)
+  if (!fromMini(e) || !b) return;
+  const w = clampNum(Math.round(Number(b.width) || MINI_MIN), MINI_MIN, MINI_MAX), h = Math.round(w * 9 / 16);
+  if (!Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y))) return;
+  miniWidth = w;
+  miniWin.setBounds({ x: Math.round(Number(b.x)) - MINI_PAD, y: Math.round(Number(b.y)) - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
+});
 ipcMain.on('mini:close-self', (e) => {
-  if (!miniWin || miniWin.isDestroyed() || e.sender !== miniWin.webContents) return;
+  if (!fromMini(e)) return;
   closeMiniWindow();
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed');
 });
-ipcMain.on('mini:return', (e, st) => {
-  if (!miniWin || miniWin.isDestroyed() || e.sender !== miniWin.webContents) return;
+ipcMain.on('mini:return', (e, st) => { // Back to the level
+  if (!fromMini(e)) return;
   const d = { vid: String((st && st.vid) || ''), time: Number(st && st.time) || 0, playing: !!(st && st.playing) };
   closeMiniWindow();
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1381,6 +1442,7 @@ ipcMain.on('mini:return', (e, st) => {
   }
 });
 ipcMain.handle('mini:close', async () => { closeMiniWindow(); return true; }); // another video started in the app
+ipcMain.handle('mini:requestReturn', async () => { if (miniWin && !miniWin.isDestroyed()) miniWin.webContents.send('mini:requestReturn'); return true; });
 
 let quitSynced = false;
 app.on('before-quit', (e) => {

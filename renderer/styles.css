@@ -2532,7 +2532,7 @@ body.glassy .fx-modal,body.glassy .fx-toast,body.glassy .fx-sugg{background-colo
 .fx-overlay.closing .fx-modal{animation:fxPopOut .15s ease-in forwards;}
 @media (prefers-reduced-motion:reduce){.fx-overlay,.fx-modal,.fx-overlay.closing,.fx-overlay.closing .fx-modal{animation:none;}}
 .fx-flash{outline:2px solid var(--accent);outline-offset:4px;border-radius:var(--radius);transition:outline-color .4s;}
-.palette-hint{max-width:56%;}
+.palette-hint{max-width:62%;}
 .fx-refresh-row{display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);}
 .fx-refresh-row:last-child{border-bottom:0;}
 .fx-refresh-text{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;}
@@ -2623,7 +2623,7 @@ body.glassy .fx-modal,body.glassy .fx-toast,body.glassy .fx-sugg{background-colo
 .multi-pack-chips{display:flex;flex-wrap:wrap;gap:6px;}
 
 /* the play button on a profile's completed levels is YouTube's own */
-.completed-banner .c-play:not(.c-open){width:42px;height:30px;border-radius:0;background:none;filter:drop-shadow(0 1px 3px rgba(0,0,0,.55));}
+.completed-banner .c-play:not(.c-open){width:42px;height:30px;border-radius:0;background:none;filter:none;box-shadow:none;border:none;}
 .completed-banner .c-play:not(.c-open) svg{width:100%;height:100%;display:block;}
 .completed-banner .c-play:not(.c-open):hover{background:none;transform:scale(1.12);}
 .completed-banner .c-play.c-play-none:not(.c-open):hover{background:none;transform:none;}
@@ -2640,18 +2640,50 @@ body.glassy .fx-modal,body.glassy .fx-toast,body.glassy .fx-sugg{background-colo
 .nav-more.side .nav-more-btn svg{width:17px;height:17px;}
 .nav-more.side .nav-more-panel{top:auto;bottom:0;left:calc(100% + 14px);transform-origin:bottom left;}
 .nav-more.side .nav-more-panel:empty::before{content:'No tabs here yet. Right-click a tab and choose “Move into the menu”.';}
-/* ---- title bar icon / "logged in": hideable, with a switch each while reordering ---- */
-body.tb-hide-icon:not(.nav-editing) .titlebar-icon{display:none;}
+/* ---- title bar logo + name / "logged in": hideable; while reordering each has the app's own toggle ---- */
+body.tb-hide-icon:not(.nav-editing) .titlebar-icon,body.tb-hide-icon:not(.nav-editing) .titlebar-title{display:none;}
 body.tb-hide-status:not(.nav-editing) .titlebar-status{display:none;}
-.tb-switch{display:none;align-items:center;gap:7px;flex:none;height:26px;padding:0 9px;margin:0 6px;border:1px solid var(--border);border-radius:999px;background:var(--bg2);color:var(--text-dim);font:inherit;font-size:11.5px;cursor:pointer;-webkit-app-region:no-drag;}
-.tb-switch-track{width:26px;height:14px;border-radius:99px;background:var(--border);position:relative;transition:background .15s ease;flex:none;}
-.tb-switch-track i{position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#fff;transition:transform .15s ease;}
-.tb-switch.on .tb-switch-track{background:var(--accent);}
-.tb-switch.on .tb-switch-track i{transform:translateX(12px);}
-body.nav-editing .tb-switch{display:inline-flex;}
-body.mac-titlebar .tb-switch[data-tb="icon"]{display:none;}
-body.nav-editing.tb-hide-icon .titlebar-icon,body.nav-editing.tb-hide-status .titlebar-status{opacity:.35;}
+/* (selectors are as specific as the app's round checkbox style, which would otherwise keep these toggles visible and full size) */
+label.checkbox-wrap.tb-switch{display:none;flex:none;height:auto;min-height:0;margin:0 6px;padding:2px 9px;gap:6px;font-size:11px;line-height:1.2;white-space:nowrap;-webkit-app-region:no-drag;cursor:pointer;}
+label.checkbox-wrap.tb-switch::before{width:7px;height:7px;}
+body.nav-editing label.checkbox-wrap.tb-switch{display:inline-flex;}
+body.nav-editing.tb-hide-icon .titlebar-icon,body.nav-editing.tb-hide-icon .titlebar-title,body.nav-editing.tb-hide-status .titlebar-status{opacity:.35;}
 body.nav-editing .titlebar-status{display:block;}
 
 .nav-edit-bar{z-index:2147483600;}
 body.nav-editing .nav-edit-bar{z-index:2147483600;}
+
+/* the menu button's list beside the side bar sits above the page, whatever is next to it */
+.nav-more.side .nav-more-panel{z-index:5000;}
+.sidebar:has(.nav-more.open){position:relative;z-index:5000;}
+/* the packs a level is in: the same translucent look as the other small pills */
+.pack-chip{background:var(--glass);}
+body.glassy .pack-chip{background-color:var(--glass);box-shadow:inset 0 1px 0 rgba(255,255,255,.24),inset 0 0 0 1px rgba(255,255,255,.04);}
+body.glassy .pack-chip:hover{background-color:var(--glass-hi);}
+
+.pic-view{display:flex;justify-content:center;border-radius:12px;overflow:hidden;background:var(--bg2);margin-bottom:10px;}
+.pic-view img,.pic-view video{display:block;max-width:100%;max-height:min(62vh,640px);object-fit:contain;}
+
+.wn-title{font-weight:800;color:var(--text);}
+
+.sync-changes{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:min(40vh,320px);overflow:auto;}
+.sync-change{padding:9px 11px;border:1px solid var(--border);border-radius:10px;background:var(--bg2);}
+.sync-change strong{display:block;margin-bottom:3px;font-size:13px;}
+
+/* AREDL's picture behind a Demon List row */
+.list-row.has-thumb{background-image:linear-gradient(90deg,rgba(10,10,12,.92) 0%,rgba(10,10,12,.62) 55%,rgba(10,10,12,.36) 100%),var(--row-thumb);background-size:cover;background-position:center;}
+.list-row.has-thumb:hover{background-image:linear-gradient(90deg,rgba(10,10,12,.82) 0%,rgba(10,10,12,.5) 55%,rgba(10,10,12,.26) 100%),var(--row-thumb);}
+.list-row.has-thumb.completed{background-image:linear-gradient(90deg,rgba(20,60,36,.9) 0%,rgba(20,60,36,.6) 55%,rgba(20,60,36,.34) 100%),var(--row-thumb);}
+.list-row.has-thumb.selected{background-image:linear-gradient(90deg,var(--accent) 0%,color-mix(in srgb,var(--accent) 78%,transparent) 55%,color-mix(in srgb,var(--accent) 50%,transparent) 100%),var(--row-thumb);}
+
+/* ---- highlighted text: “Search in command palette” popup ---- */
+.sel-pop{position:fixed;z-index:10010;padding:4px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.6);transform-origin:top left;animation:ddIn .15s cubic-bezier(.2,.8,.2,1);}
+.sel-pop-btn{display:block;background:none;border:none;color:var(--text);font:inherit;font-size:12.5px;font-weight:500;padding:6px 10px;border-radius:6px;cursor:pointer;white-space:nowrap;}
+.sel-pop-btn:hover{background:var(--accent-soft);color:var(--accent);}
+body.glassy .sel-pop{background:var(--glass);}
+body.lite .sel-pop{animation:none;box-shadow:none;}
+@media (prefers-reduced-motion:reduce){.sel-pop{animation:none;}}
+
+/* ---- the song ID in a level's Song box opens the other levels with that song ---- */
+.song-id{cursor:pointer;border-radius:4px;transition:color .12s;}
+.song-id:hover,.song-id:focus-visible{color:var(--accent);}

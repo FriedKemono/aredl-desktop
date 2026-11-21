@@ -33,8 +33,9 @@ const hash = (v) => crypto.createHash('sha1').update(stable(v)).digest('hex');
 
 class SyncError extends Error {}
 
-// the settings that mean the same thing on Windows and on a Mac
-const portable = (k) => { const sp = transfer.SPEC[k]; return !!sp && (!sp.platforms || (sp.platforms.includes('win32') && sp.platforms.includes('darwin'))); };
+// every setting the app has travels with the save file (the ones that only act on one system, such as the Windows window
+// button colours, are kept in the file and simply have no effect on the other system)
+const portable = (k) => !!transfer.SPEC[k];
 
 // ---- what one block looks like (the cleaned form, the same on every computer) ----
 function payloadOf(id, src) {
@@ -47,6 +48,8 @@ function payloadOf(id, src) {
         const v = transfer.SPEC[k].check(src.settings[k]);
         if (v !== undefined) out[k] = v;
       }
+      const bg = src.settings && transfer.cleanBackdropFile(src.settings.bgCustomFile); // a small custom backdrop file travels along
+      if (bg) out.bgCustomFile = bg;
       return out;
     }
     case 'favourites': return L('favourites', src.favourites);
@@ -65,6 +68,8 @@ function cleanRemote(id, raw) {
     case 'settings': {
       const out = {};
       if (isObj(raw)) for (const k of Object.keys(raw)) if (portable(k)) { const v = transfer.SPEC[k].check(raw[k]); if (v !== undefined) out[k] = v; }
+      const bg = isObj(raw) ? transfer.cleanBackdropFile(raw.bgCustomFile) : undefined;
+      if (bg) out.bgCustomFile = bg;
       return out;
     }
     case 'following': return { following: transfer.cleanList('following', isObj(raw) ? raw.following : []).items, notices: transfer.cleanList('followNotifications', isObj(raw) ? raw.notices : []).items };
@@ -224,6 +229,50 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
     }
     return out;
   }
+  // What differs between this app and the folder's save, part by part, without changing anything (the "List the changes" button).
+  const itemName = (it) => String((it && (it.name || (it.snap && it.snap.name) || it.level_name || it.title)) || (it && (it.level_id ?? it.id)) || 'Item');
+  function diffList(kind, local, rem) {
+    const keyOf = transfer.ITEM_KEY[kind] || ((x) => String(x && (x.id ?? x.level_id)));
+    const lm = new Map(local.map(x => [keyOf(x), x])), rm = new Map(rem.map(x => [keyOf(x), x]));
+    const onlyHere = [], onlyFolder = []; let changed = 0;
+    for (const [k, v] of lm) { if (!rm.has(k)) onlyHere.push(itemName(v)); else if (hash(v) !== hash(rm.get(k))) changed++; }
+    for (const [k, v] of rm) if (!lm.has(k)) onlyFolder.push(itemName(v));
+    return { onlyHere, onlyFolder, changed };
+  }
+  function diffPart(id, local, rem) {
+    const sec = transfer.SECTIONS.find(x => x.id === id) || { label: id };
+    if (!rem) return { id, label: sec.label, folderHasNone: true, onlyHere: isEmpty(id, local) ? [] : [`${sec.label} (everything here)`], onlyFolder: [], changed: 0 };
+    if (id === 'settings') {
+      const label = (k) => (transfer.SPEC[k] && transfer.SPEC[k].label) || k;
+      const onlyHere = [], onlyFolder = []; let changed = 0; const names = [];
+      for (const k of new Set([...Object.keys(local), ...Object.keys(rem)])) {
+        if (!(k in rem)) onlyHere.push(label(k)); else if (!(k in local)) onlyFolder.push(label(k)); else if (hash(local[k]) !== hash(rem[k])) { changed++; names.push(label(k)); }
+      }
+      return { id, label: sec.label, onlyHere, onlyFolder, changed, changedNames: names };
+    }
+    if (id === 'following') {
+      const a = diffList('following', local.following, rem.following), b = diffList('followNotifications', local.notices, rem.notices);
+      return { id, label: sec.label, onlyHere: a.onlyHere, onlyFolder: a.onlyFolder, changed: a.changed + b.changed };
+    }
+    return { id, label: sec.label, ...diffList(id, local, rem) };
+  }
+  function preview() {
+    const st = load();
+    if (!st.folder) return { ok: false, error: 'Connect a Google Drive folder first.' };
+    if (!fileName()) return { ok: false, error: NEEDS_KEY };
+    if (!fs.existsSync(st.folder)) return { ok: false, error: `The sync folder can't be found (${st.folder}).` };
+    let remote;
+    try { remote = readRemote(); } catch (err) { return { ok: false, error: err.message }; }
+    const src = io.source(), parts = [];
+    for (const id of st.parts) {
+      try {
+        const rs = isObj(remote.doc.sections[id]) ? remote.doc.sections[id] : null;
+        const d = diffPart(id, payloadOf(id, src), rs ? cleanRemote(id, rs.data) : null);
+        if (d.onlyHere.length || d.onlyFolder.length || d.changed || d.folderHasNone) parts.push(d); // parts that are identical aren't listed
+      } catch { /* a part that can't be compared is left out */ }
+    }
+    return { ok: true, hasRemote: remote.exists, parts };
+  }
   // true when something here differs from what was last saved to the folder (looked at on this computer only: no request is made)
   function hasLocalChanges() {
     const st = load();
@@ -243,7 +292,7 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
   function reset() { const st = load(); st.hashes = {}; st.lastSummary = null; st.lastSyncAt = null; save(); }
   function disconnect() { const st = load(); st.folder = null; st.enabled = false; st.hashes = {}; st.lastSummary = null; save(); return status(); }
 
-  return { syncNow, hasLocalChanges, bigChanges, status, reset, setFolder, setEnabled, setParts, disconnect, _state: load, _hash: hash, SYNC_FILE };
+  return { syncNow, preview, hasLocalChanges, bigChanges, status, reset, setFolder, setEnabled, setParts, disconnect, _state: load, _hash: hash, SYNC_FILE };
 }
 
 module.exports = { createSync, SyncError, SYNC_FILE, NEEDS_KEY, payloadOf, cleanRemote, hash };

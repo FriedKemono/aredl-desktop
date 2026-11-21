@@ -97,12 +97,22 @@
     },
     {
       id: 'palette',
+      noScroll: true,
+      before: async () => { // the real palette opens, so it is what gets highlighted
+        if (window.fx && fx.openPalette) { fx.openPalette(); await sleep(350); const i = q('.palette-input'); if (i) i.blur(); }
+      },
+      after: () => { if (window.fx && fx.closeModal) fx.closeModal(); },
+      target: () => q('.palette'),
+      side: 'bottom',
       title: 'Command palette',
-      body: () => 'Press <kbd>' + ((typeof appSettings !== 'undefined' && appSettings.paletteKey) || '`') + '</kbd> to open the command palette from anywhere (the key can be changed in Settings). Type a level, player, tab or action and press <kbd>Enter</kbd>. <kbd>Tab</kbd> steps down through the results and <kbd>Shift</kbd> + <kbd>Tab</kbd> back up.',
+      body: () => 'Press <kbd>' + ((typeof appSettings !== 'undefined' && appSettings.paletteKey) || '`') + '</kbd> to open the command palette from anywhere (the key can be changed in Settings). Type a level, player, tab or action and press <kbd>Enter</kbd>. Highlighting any text offers a “Search in command palette” popup that opens it with that text. <kbd>Tab</kbd> steps down through the results and <kbd>Shift</kbd> + <kbd>Tab</kbd> back up.',
     },
     {
       id: 'packs',
-      target: () => q('.nav-btn[data-tab="packs"]'),
+      target: () => { // the Packs tab; the whole tab bar if that tab is tucked away or squeezed out of view
+        const b = q('.nav-btn[data-tab="packs"]'), r = b && b.getBoundingClientRect();
+        return r && r.width > 0 && r.height > 0 ? b : (navTop() ? q('#topNav') : q('.sidebar'));
+      },
       side: () => (navTop() ? 'bottom' : 'right'),
       title: 'Packs',
       body: 'Every pack in one place, with search. A pack opens to its levels, and the packs a level belongs to are shown under its video. Packs on a profile can be opened too.',
@@ -128,7 +138,9 @@
         row.scrollIntoView({ block: 'nearest' });
         await sleep(200); // let any scrolling settle first (scrolling closes the menu)
         const r = row.getBoundingClientRect();
-        row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, view: window, clientX: r.left + 70, clientY: r.top + r.height / 2 }));
+        const open = () => row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, view: window, clientX: r.left + 70, clientY: r.top + r.height / 2 }));
+        open();
+        if (!(await waitFor(() => q('#ctxMenu'), 600))) { open(); await waitFor(() => q('#ctxMenu'), 900); } // opens on the second try if the first was swallowed
         await sleep(200);
       },
       after: () => { if (typeof hideContextMenu === 'function') hideContextMenu(); },

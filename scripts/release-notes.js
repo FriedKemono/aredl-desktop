@@ -16,7 +16,7 @@ if (!entry) {
 }
 const label = { new: 'New', improved: 'Improved', fixed: 'Fixed' };
 const md = entry
-  ? `## What's new in ${version}${entry.title ? ` - ${entry.title}` : ''}\n\n${entry.items.map(([t, x]) => `- **${label[t] || t}:** ${x}`).join('\n')}\n`
+  ? `## What's new in ${version}${entry.title ? ` - ${entry.title}` : ''}\n\n${entry.items.map(([t, x, title]) => `- **${title ? title + ' ' : ''}(${label[t] || t})** ${x}`).join('\n')}\n`
   : `## ${version}\n\nTest build.\n`;
 fs.mkdirSync(path.join(__dirname, '..', 'build'), { recursive: true });
 fs.writeFileSync(path.join(__dirname, '..', 'build', 'release-notes.md'), md);
