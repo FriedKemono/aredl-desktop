@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
-    version: 'Beta 1.1.3',
+    version: 'Beta1.1.3',
     date: '21-11-2026',
     title: 'Packs, AREDL level pictures, a floating player, Google Drive timing and more',
     items: [
