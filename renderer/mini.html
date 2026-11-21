@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AREDL Desktop</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* the floating player is the corner player, filling a window of its own */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  body { display: block; }
+  .video-dock.mini { position: fixed !important; left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; transform: none !important; z-index: 1; visibility: visible; overflow: hidden; box-shadow: none; }
+  .video-dock .mp-resize { display: none !important; } /* the window's own edges resize it */
+</style>
+</head>
+<body>
+<div class="video-dock mini">
+  <iframe title="Video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+  <div class="mp-bar">
+    <span class="mp-grip" aria-hidden="true"></span>
+    <span class="mp-title"></span>
+    <button class="mp-btn" data-mp="return" title="Back to the level" aria-label="Back to the level"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5L3.5 9.5 8 14"/><path d="M3.5 9.5H12a4.5 4.5 0 0 1 4.5 4.5v1"/></svg></button>
+    <button class="mp-btn" data-mp="close" title="Close player" aria-label="Close player"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
+  </div>
+</div>
+<script src="mini.js"></script>
+</body>
+</html>

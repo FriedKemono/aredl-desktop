@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, safeStorage, nativeImage, shell, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, safeStorage, nativeImage, shell, dialog, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -78,6 +78,8 @@ const ENDPOINTS = {
   notifications: `${API_BASE}/users/@me/notifications`, // one feed for the account, not per list
   profile: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/profile/${id}`,
   changelog: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/changelog?page=${page}`,
+  packTiers: (mode) => `${API_BASE}/${apiPrefix(mode)}/pack-tiers`,
+  levelPacks: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/packs`,
   leaderboard: (page, mode, per = 50) => `${API_BASE}/${apiPrefix(mode)}/leaderboard?page=${page}&per_page=${per}`,
   countries: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/leaderboard/countries?page=${page}&per_page=50`,
   country: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/country/${encodeURIComponent(id)}`,
@@ -327,11 +329,62 @@ const MIME_TYPES = {
 };
 let localServerPort = null;
 
+// ---- a custom backdrop (an image, GIF or video the person chose) ----
+const BG_TYPES = {
+  '.png': ['image', 'image/png'], '.jpg': ['image', 'image/jpeg'], '.jpeg': ['image', 'image/jpeg'], '.webp': ['image', 'image/webp'], '.gif': ['image', 'image/gif'], '.avif': ['image', 'image/avif'], '.bmp': ['image', 'image/bmp'],
+  '.mp4': ['video', 'video/mp4'], '.m4v': ['video', 'video/mp4'], '.webm': ['video', 'video/webm'], '.mov': ['video', 'video/quicktime'], '.ogv': ['video', 'video/ogg'],
+};
+const BG_MAX_BYTES = 500 * 1024 * 1024;
+const customBgFile = () => { const ext = String(loadSettings().bgCustomExt || ''); return BG_TYPES[ext] ? path.join(app.getPath('userData'), `custom-bg${ext}`) : null; };
+function serveCustomBg(req, res) {
+  const file = customBgFile();
+  let size = 0; try { size = file ? fs.statSync(file).size : 0; } catch { size = 0; }
+  if (!size) { res.writeHead(404); res.end(); return; }
+  const type = BG_TYPES[path.extname(file)][1];
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  let start = 0, end = size - 1, code = 200;
+  if (m && (m[1] || m[2])) { // a video asks for the part it needs
+    if (m[1]) { start = Number(m[1]); if (m[2]) end = Math.min(end, Number(m[2])); } else { start = Math.max(0, size - Number(m[2])); }
+    if (start > end || start >= size) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); res.end(); return; }
+    code = 206;
+  }
+  const head = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Cache-Control': 'no-cache' };
+  if (code === 206) head['Content-Range'] = `bytes ${start}-${end}/${size}`;
+  res.writeHead(code, head);
+  fs.createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+}
+const customBgInfo = () => { const s = loadSettings(), ok = !!customBgFile() && fs.existsSync(customBgFile()); return { on: ok && s.bgCustomOn === true, has: ok, type: ok ? (BG_TYPES[s.bgCustomExt] || [])[0] || null : null, name: ok ? String(s.bgCustomName || '') : '', ver: Number(s.bgCustomVer) || 0 }; };
+ipcMain.handle('bg:info', async () => customBgInfo());
+ipcMain.handle('bg:pickCustom', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a backdrop', properties: ['openFile'],
+    filters: [{ name: 'Images, GIFs and videos', extensions: Object.keys(BG_TYPES).map(e => e.slice(1)) }],
+  });
+  if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+  const src = r.filePaths[0], ext = path.extname(src).toLowerCase();
+  if (!BG_TYPES[ext]) return { ok: false, error: 'That kind of file can’t be used as a backdrop.' };
+  let size = 0; try { size = fs.statSync(src).size; } catch { return { ok: false, error: 'That file couldn’t be read.' }; }
+  if (size > BG_MAX_BYTES) return { ok: false, error: 'That file is larger than 500 MB.' };
+  try {
+    for (const e of Object.keys(BG_TYPES)) fs.rmSync(path.join(app.getPath('userData'), `custom-bg${e}`), { force: true });
+    fs.copyFileSync(src, path.join(app.getPath('userData'), `custom-bg${ext}`));
+  } catch (err) { return { ok: false, error: `That file couldn’t be copied (${err.message}).` }; }
+  saveSettings({ bgCustomOn: true, bgCustomExt: ext, bgCustomName: path.basename(src).slice(0, 120), bgCustomVer: Date.now() });
+  return { ok: true, ...customBgInfo() };
+});
+ipcMain.handle('bg:setCustomOn', async (_e, on) => { saveSettings({ bgCustomOn: !!on && !!customBgFile() }); return customBgInfo(); });
+ipcMain.handle('bg:clearCustom', async () => {
+  for (const e of Object.keys(BG_TYPES)) { try { fs.rmSync(path.join(app.getPath('userData'), `custom-bg${e}`), { force: true }); } catch { /* already gone */ } }
+  saveSettings({ bgCustomOn: false, bgCustomExt: '', bgCustomName: '' });
+  return customBgInfo();
+});
+
 function startLocalServer() {
   return new Promise((resolve) => {
     const rendererDir = path.join(__dirname, 'renderer');
     const server = http.createServer((req, res) => {
       const urlPath = decodeURIComponent(req.url.split('?')[0]);
+      if (urlPath === '/_bg/current') { serveCustomBg(req, res); return; }
       let filePath = path.join(rendererDir, urlPath === '/' ? 'index.html' : urlPath);
       if (!filePath.startsWith(rendererDir)) { res.writeHead(403); res.end(); return; }
       fs.readFile(filePath, (err, data) => {
@@ -461,7 +514,7 @@ function createTray() {
 // ---------------------------------------------------------------------------
 // Small JSON lists kept in the app's data folder (followed levels and the
 // update notifications they produce). Only these names are allowed.
-const STORE_NAMES = new Set(['following', 'follow-notifications', 'personal-list', 'custom-lists', 'saved-filters']);
+const STORE_NAMES = new Set(['following', 'follow-notifications', 'personal-list', 'custom-lists', 'saved-filters', 'thumb-overrides']);
 const storePath = (name) => path.join(userDataDir(), `${name}.json`);
 ipcMain.handle('store:get', async (_e, name) => {
   if (!STORE_NAMES.has(name)) return [];
@@ -648,13 +701,14 @@ const TRANSFER_FILES = {
   favourites: favouritesPath,
   lists: () => storePath('custom-lists'),
   filters: () => storePath('saved-filters'),
+  demonlist: () => storePath('thumb-overrides'),
   following: () => storePath('following'),
   followNotifications: () => storePath('follow-notifications'),
   personal: () => storePath('personal-list'),
   notifications: clearedNotifsPath,
 };
 const FILES_OF = { // which files each part of an import touches
-  settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], following: ['following', 'followNotifications'], personal: ['personal'], notifications: ['notifications'],
+  settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], demonlist: ['demonlist'], following: ['following', 'followNotifications'], personal: ['personal'], notifications: ['notifications'],
 };
 function gatherTransferSources() {
   return {
@@ -662,6 +716,7 @@ function gatherTransferSources() {
     favourites: readList(TRANSFER_FILES.favourites()),
     customLists: readList(TRANSFER_FILES.lists()),
     savedFilters: readList(TRANSFER_FILES.filters()),
+    thumbOverrides: readList(TRANSFER_FILES.demonlist()),
     following: readList(TRANSFER_FILES.following()),
     followNotifications: readList(TRANSFER_FILES.followNotifications()),
     personal: readList(TRANSFER_FILES.personal()),
@@ -850,7 +905,7 @@ function syncFileName() {
   return key ? `AREDL-Desktop-${require('crypto').createHash('sha256').update(String(key)).digest('hex').slice(0, 16)}.json` : null;
 }
 const drive = createDrive({ userDataDir, safeStorage, openExternal: (u) => shell.openExternal(u), request: (url, options, what) => miscFetch(url, options, what), fileName: syncFileName, log: console });
-const SYNC_FILES_OF = { settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], personal: ['personal'], notifications: ['notifications'], following: ['following', 'followNotifications'] };
+const SYNC_FILES_OF = { settings: ['settings'], favourites: ['favourites'], lists: ['lists'], filters: ['filters'], demonlist: ['demonlist'], personal: ['personal'], notifications: ['notifications'], following: ['following', 'followNotifications'] };
 const writeJson = (file, data) => fs.writeFileSync(file, JSON.stringify(data));
 const syncer = createSync({
   userDataDir,
@@ -872,7 +927,7 @@ async function safeSync(mode) {
     if (!drive.active() || !syncFileName()) return syncer.syncNow(mode); // without a folder / a sign-in it says what is missing
     try { await drive.pull(); } catch (err) { return { ok: false, error: `Google Drive: ${err.message}` }; }
     const res = syncer.syncNow(mode);
-    if (res.ok) {
+    if (res.ok && mode !== 'check') { // 'check' only looks at the folder: nothing is uploaded
       try { const up = await drive.push(); if (up.uploaded) res.file = { name: up.name, folder: up.folder, modifiedTime: up.modifiedTime, size: up.size }; }
       catch (err) { syncer.reset(); return { ok: false, error: `Google Drive: the changes couldn’t be uploaded (${err.message}).` }; } // reset: nothing counts as saved
     }
@@ -918,17 +973,68 @@ ipcMain.handle('sync:now', async (_e, choice) => {
   if (res.ok && (res.pulled.length || res.merged.length)) res.reload = true; // something here changed: the page reloads to use it
   return res;
 });
-let lastWaiting = '';
-async function backgroundSync() {
-  const st = syncer.status();
-  if (!st.enabled || !st.folder) return;
-  const res = await safeSync('push'); // only sends this computer's changes; anything to bring here waits for the person
-  const key = res.ok ? res.waiting.join(',') : '';
-  if (res.ok && res.waiting.length && key !== lastWaiting && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sync:waiting', res.waiting);
-  lastWaiting = key;
+// ---- how often the app saves to Google Drive, and how often it looks for changes made on another computer ----
+// Two separate timers (or one, when they are linked). Nothing is sent when there is nothing to send: a save run first
+// checks, on this computer only, whether anything changed since the last save; a check is a single small request.
+const SYNC_MINUTES = [0, 1, 2, 5, 10, 15, 30, 60]; // 0 = never on a timer (still on Sync now and when the app closes)
+function syncIntervals() {
+  const s = loadSettings(), ok = (v) => SYNC_MINUTES.includes(v);
+  const save = ok(s.syncSaveMins) ? s.syncSaveMins : 5, linked = s.syncLinked !== false;
+  return { save, check: linked ? save : (ok(s.syncCheckMins) ? s.syncCheckMins : 5), linked };
 }
-let syncTimer = null;
-function startSyncTimer() { clearInterval(syncTimer); syncTimer = setInterval(backgroundSync, 5 * 60 * 1000); }
+let lastWaiting = '', syncBusy = false;
+async function backgroundSync(kind) { // kind: 'both' (linked), 'save' or 'check'
+  const st = syncer.status();
+  if (!st.enabled || !st.folder || syncBusy) return;
+  if (kind !== 'check' && !syncer.hasLocalChanges()) { if (kind === 'save') return; } // nothing changed here: no request at all for a save
+  syncBusy = true;
+  try {
+    if (kind !== 'check' && !(await confirmBigChange())) return; // a really big change waits for a yes
+    const res = await safeSync(kind === 'check' ? 'check' : 'push'); // never brings anything here: what is waiting is reported for the person to sync on purpose
+    const key = res.ok ? res.waiting.join(',') : '';
+    if (res.ok && res.waiting.length && key !== lastWaiting && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('sync:waiting', res.waiting);
+    if (kind !== 'save') lastWaiting = key;
+  } finally { syncBusy = false; }
+}
+// A really big change (many levels added or most of a list gone) is not saved by the timer without asking first.
+// Saying no leaves things as they are; the same change isn't asked about again until it changes further.
+let bigDeclined = '', bigAsking = false;
+async function confirmBigChange() {
+  const big = syncer.bigChanges();
+  if (!big.length) { bigDeclined = ''; return true; }
+  const key = big.map(b => `${b.id}:${b.was}>${b.now}`).join(',');
+  if (key === bigDeclined) return false;
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized() || bigAsking) return false; // can't ask now: try again next time
+  bigAsking = true;
+  const label = (id) => (transfer.SECTIONS.find(x => x.id === id) || {}).label || id;
+  const reqId = require('crypto').randomUUID();
+  const answer = await new Promise((resolve) => {
+    const done = (v) => { ipcMain.removeListener('sync:bigAnswer', on); clearTimeout(t); resolve(v); };
+    const on = (_e, id, ok) => { if (id === reqId) done(!!ok); };
+    const t = setTimeout(() => done(false), 10 * 60 * 1000);
+    ipcMain.on('sync:bigAnswer', on);
+    mainWindow.webContents.send('sync:bigChange', { id: reqId, changes: big.map(b => ({ label: label(b.id), was: b.was, now: b.now })) });
+  });
+  bigAsking = false;
+  if (!answer) bigDeclined = key;
+  return answer;
+}
+let syncTimers = [];
+function startSyncTimer() {
+  syncTimers.forEach(clearInterval); syncTimers = [];
+  const { save, check, linked } = syncIntervals();
+  if (linked) { if (save) syncTimers.push(setInterval(() => backgroundSync('both'), save * 60000)); return; }
+  if (save) syncTimers.push(setInterval(() => backgroundSync('save'), save * 60000));
+  if (check) syncTimers.push(setInterval(() => backgroundSync('check'), check * 60000));
+}
+ipcMain.handle('sync:getIntervals', async () => ({ ...syncIntervals(), options: SYNC_MINUTES }));
+ipcMain.handle('sync:setIntervals', async (_e, v) => {
+  const ok = (x) => SYNC_MINUTES.includes(x), cur = syncIntervals();
+  const patch = { syncSaveMins: ok(v && v.save) ? v.save : cur.save, syncLinked: !(v && v.linked === false), syncCheckMins: ok(v && v.check) ? v.check : cur.check };
+  saveSettings(patch);
+  startSyncTimer();
+  return syncIntervals();
+});
 
 ipcMain.handle('settings:get', async () => loadSettings());
 ipcMain.handle('settings:set', async (_e, patch) => saveSettings(patch && typeof patch === 'object' ? patch : {}));
@@ -959,6 +1065,8 @@ ipcMain.handle('api:getCachedLevels', async (_e, mode) => {
 
 ipcMain.handle('api:getChangelog', async (_e, page, mode) => apiFetch(ENDPOINTS.changelog(page || 1, mode)));
 
+ipcMain.handle('api:getPackTiers', async (_e, mode) => apiFetch(ENDPOINTS.packTiers(mode)));
+ipcMain.handle('api:getLevelPacks', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelPacks(encodeURIComponent(levelId), mode)));
 ipcMain.handle('api:getLeaderboard', async (_e, page, mode, per) => apiFetch(ENDPOINTS.leaderboard(page || 1, mode, [50, 100].includes(Number(per)) ? Number(per) : 50)));
 ipcMain.handle('api:getCountries', async (_e, page, mode) => apiFetch(ENDPOINTS.countries(page || 1, mode)));
 ipcMain.handle('api:getCountry', async (_e, id, mode) => apiFetch(ENDPOINTS.country(id, mode)));
@@ -1202,9 +1310,82 @@ app.on('window-all-closed', () => {
   // the window closed. Quit explicitly via the tray menu.
 });
 
+
+// ---------------------------------------------------------------------------
+// The floating player: the corner player pulled out of the app into a window of its own.
+// It stays on top of everything (other apps too), can be put anywhere on any screen, keeps playing while the app is
+// minimised, and has no button of its own in the taskbar.
+// ---------------------------------------------------------------------------
+let miniWin = null, miniInit = null, miniWidth = 0;
+const clampNum = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+function closeMiniWindow() { if (miniWin && !miniWin.isDestroyed()) miniWin.destroy(); miniWin = null; }
+function openMiniWindow(o) {
+  closeMiniWindow();
+  if (!o || typeof o.vid !== 'string' || !/^[\w-]{6,20}$/.test(o.vid)) return false;
+  const w = clampNum(Math.round(Number(miniWidth || o.width) || 340), 240, 1280), h = Math.round(w * 9 / 16);
+  const pt = { x: Math.round(Number(o.screenX) || 0), y: Math.round(Number(o.screenY) || 0) };
+  const wa = screen.getDisplayNearestPoint(pt).workArea;
+  const x = clampNum(pt.x, wa.x, wa.x + wa.width - w), y = clampNum(pt.y, wa.y, wa.y + wa.height - h);
+  miniInit = {
+    vid: o.vid, time: Number(o.time) || 0, playing: !!o.playing, title: String(o.title || '').slice(0, 300),
+    rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000),
+  };
+  miniWin = new BrowserWindow({
+    width: w, height: h, x, y, minWidth: 240, minHeight: 135, show: false,
+    frame: false, resizable: true, minimizable: false, maximizable: false, fullscreenable: false,
+    skipTaskbar: true, alwaysOnTop: true, hasShadow: true, backgroundColor: '#000000', title: 'AREDL Desktop',
+    webPreferences: { preload: path.join(__dirname, 'mini-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
+  });
+  const win = miniWin;
+  win.setAlwaysOnTop(true, 'screen-saver'); // above full-screen windows and other apps
+  win.setSkipTaskbar(true);
+  win.setAspectRatio(16 / 9);
+  if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true); // on every desktop (without hiding the Dock icon)
+  win.setMenuBarVisibility(false);
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.on('resize', () => { if (!win.isDestroyed()) miniWidth = win.getSize()[0]; });
+  win.on('closed', () => {
+    if (miniWin === win) { miniWin = null; if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed'); }
+  });
+  win.loadURL(`http://127.0.0.1:${localServerPort}/mini.html`);
+  return true;
+}
+ipcMain.handle('mini:open', async (_e, o) => openMiniWindow(o));
+ipcMain.on('mini:ready', (e) => {
+  if (miniWin && !miniWin.isDestroyed() && e.sender === miniWin.webContents && miniInit) {
+    miniWin.webContents.send('mini:init', miniInit);
+    miniWin.showInactive(); // appears without taking the keyboard from what you were doing
+    miniWin.setAlwaysOnTop(true, 'screen-saver');
+  }
+});
+ipcMain.on('mini:move', (e, x, y) => {
+  if (!miniWin || miniWin.isDestroyed() || e.sender !== miniWin.webContents) return;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const [w, h] = miniWin.getSize();
+  miniWin.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h });
+});
+ipcMain.on('mini:close-self', (e) => {
+  if (!miniWin || miniWin.isDestroyed() || e.sender !== miniWin.webContents) return;
+  closeMiniWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed');
+});
+ipcMain.on('mini:return', (e, st) => {
+  if (!miniWin || miniWin.isDestroyed() || e.sender !== miniWin.webContents) return;
+  const d = { vid: String((st && st.vid) || ''), time: Number(st && st.time) || 0, playing: !!(st && st.playing) };
+  closeMiniWindow();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show(); mainWindow.focus();
+    mainWindow.webContents.send('mini:returned', d);
+  }
+});
+ipcMain.handle('mini:close', async () => { closeMiniWindow(); return true; }); // another video started in the app
+
 let quitSynced = false;
 app.on('before-quit', (e) => {
   app.isQuiting = true;
+  closeMiniWindow();
   stopPolling();
   if (macUpdater) macUpdater.onQuit(); // an update you chose "Later" for goes in as the app quits
   try {

@@ -39,7 +39,7 @@
       target: () => (navTop() ? q('#topNav') : q('.sidebar')),
       side: () => (navTop() ? 'bottom' : 'right'),
       title: 'Your tabs',
-      body: () => 'Everything lives in these tabs: the <b>Demon List</b>, your <b>Favourites</b>, <b>Personal list</b>, <b>Followed levels</b>, the <b>Leaderboard</b>, your <b>Profile</b> and <b>Settings</b>.'
+      body: () => 'Everything lives in these tabs: the <b>Demon List</b>, your <b>Favourites</b>, <b>Personal list</b>, <b>Followed levels</b>, the <b>Leaderboard</b>, <b>Packs</b>, your <b>Profile</b> and <b>Settings</b>.'
         + (navTop() && q('#navMore') && !q('#navMore').hidden ? ' Tabs you tuck away sit behind the <b>⋯</b> button.' : ''),
     },
     {
@@ -78,6 +78,34 @@
       side: 'bottom',
       title: 'Narrow it down',
       body: 'The <b>tag</b> button includes or excludes tags (green = must have, red = must not). The status menu starts on <b>All statuses</b>, and you can sort by position, points or A–Z.',
+    },
+    {
+      id: 'savedfilters',
+      tab: 'list',
+      target: '#savedFiltersBtn',
+      side: 'bottom',
+      title: 'Saved filters',
+      body: 'Save the current search, tags, status and enjoyment range under a name, then apply it again in one click. Saved filters also show up in the command palette and in <b>Pick a level</b>.',
+    },
+    {
+      id: 'pick',
+      tab: 'list',
+      target: '#pickBtn',
+      side: 'bottom',
+      title: 'Pick a level',
+      body: 'Rolls a random level that matches your filters, with an option to leave out levels you’ve already beaten. <b>Harder</b> and <b>Easier</b> move a little way up or down the list from the level shown.',
+    },
+    {
+      id: 'palette',
+      title: 'Command palette',
+      body: () => 'Press <kbd>' + ((typeof appSettings !== 'undefined' && appSettings.paletteKey) || '`') + '</kbd> to open the command palette from anywhere (the key can be changed in Settings). Type a level, player, tab or action and press <kbd>Enter</kbd>. <kbd>Tab</kbd> steps down through the results and <kbd>Shift</kbd> + <kbd>Tab</kbd> back up.',
+    },
+    {
+      id: 'packs',
+      target: () => q('.nav-btn[data-tab="packs"]'),
+      side: () => (navTop() ? 'bottom' : 'right'),
+      title: 'Packs',
+      body: 'Every pack in one place, with search. A pack opens to its levels, and the packs a level belongs to are shown under its video. Packs on a profile can be opened too.',
     },
     {
       id: 'tools',

@@ -20,7 +20,7 @@ const PREFIX = 'AREDL-SETTINGS:';
 const MAX_BYTES = 12 * 1024 * 1024;     // the biggest file / text accepted
 const MAX_INFLATED = 24 * 1024 * 1024;  // ...and the most a compressed text may expand to
 
-const TABS = ['list', 'favourites', 'personal', 'followed', 'changelog', 'leaderboard', 'profile', 'submissions', 'notifications', 'settings'];
+const TABS = ['list', 'favourites', 'personal', 'followed', 'changelog', 'leaderboard', 'packs', 'profile', 'submissions', 'notifications', 'settings'];
 const MENU_TOKEN = '__menu__';
 const TOP_BAR_PLATFORMS = ['win32', 'darwin']; // where the tabs can live in the title bar
 
@@ -53,10 +53,11 @@ const SPEC = {
   bgDrift:         { label: 'Backdrop drift',          check: bool },
   bgBlur:          { label: 'Backdrop blur',           check: int(0, 140) },
   bgBright:        { label: 'Backdrop brightness',     check: int(5, 100) },
-  shaderSpeed:     { label: 'Shader speed',            check: int(0, 400) },
+  shaderSpeed:     { label: 'Shader speed',            check: int(0, 1000) },
   shaderIntensity: { label: 'Shader intensity',        check: int(10, 200) },
   // behaviour
-  startTab:        { label: 'Start-up tab',            check: oneOf('list', 'favourites', 'followed', 'personal', 'changelog', 'leaderboard', 'profile', 'submissions', 'notifications') },
+  bgSource:        { label: 'Level picture source',    check: oneOf('youtube', 'aredl') },
+  startTab:        { label: 'Start-up tab',            check: oneOf('list', 'favourites', 'followed', 'personal', 'changelog', 'leaderboard', 'packs', 'profile', 'submissions', 'notifications') },
   videoOnLeave:    { label: 'Videos when you leave',   check: oneOf('popup', 'background', 'pause', 'stop') },
   miniPlayer:      { label: 'Corner player size',      check: (v) => (v && typeof v === 'object' && Number.isFinite(v.width) ? { x: null, y: null, width: Math.min(900, Math.max(220, Math.round(v.width))) } : undefined) }, // its position depends on the screen, so only the size travels
   followMins:      { label: 'Followed-level checks',   check: (v) => ([0, 1, 2, 5, 10, 30].includes(v) ? v : undefined) },
@@ -70,7 +71,9 @@ const SPEC = {
   paletteKey:      { label: 'Command palette key',     check: (v) => (typeof v === 'string' && /^(?:(?:Mod|Alt|Shift)\+){0,3}\S{1,12}$/.test(v) ? v : undefined) }, // Mod = Ctrl on Windows, Cmd on a Mac
   // the top bar
   navTop:          { label: 'Tabs in the top bar',     check: bool,                     platforms: TOP_BAR_PLATFORMS, why: 'the top bar is only available on Windows and Mac' },
-  navMenu:         { label: 'Top bar menu button',     check: bool,                     platforms: TOP_BAR_PLATFORMS, why: 'the top bar is only available on Windows and Mac' },
+  navMenu:         { label: 'Menu button for extra tabs', check: bool },
+  tbShowIcon:      { label: 'Title bar icon',          check: bool },
+  tbShowStatus:    { label: 'Title bar “logged in” text', check: bool },
   navCompact:      { label: 'Compact top bar tabs',    check: oneOf('off', 'always', 'fullscreen'), platforms: TOP_BAR_PLATFORMS, why: 'the top bar is only available on Windows and Mac' },
   navLayout:       { label: 'Top bar tab layout',      platforms: TOP_BAR_PLATFORMS, why: 'the top bar is only available on Windows and Mac',
                      check: (v) => (v && typeof v === 'object' && !Array.isArray(v) ? { left: tabList(true)(v.left) || [], right: tabList(true)(v.right) || [], menu: tabList(false)(v.menu) || [] } : undefined) },
@@ -93,6 +96,7 @@ const SECTIONS = [
   { id: 'following',     label: 'Followed levels',       noun: ['level', 'levels'],           about: 'the levels you follow, and the update notices they produced' },
   { id: 'personal',      label: 'Personal list',         noun: ['entry', 'entries'],          about: 'your own list of completed levels and runs' },
   { id: 'filters',       label: 'Saved filters',         noun: ['filter', 'filters'],         about: 'your saved Demon List filters' },
+  { id: 'demonlist',     label: 'Demonlist settings',    noun: ['override', 'overrides'],     about: 'which picture (YouTube or AREDL) each level uses as its backdrop' },
   { id: 'notifications', label: 'Cleared notifications', noun: ['notification', 'notifications'], about: 'which notifications you have already cleared' },
 ];
 const SECTION_IDS = SECTIONS.map(x => x.id);
@@ -156,18 +160,20 @@ const CLEAN = {
     if (e.percent != null && !(Number.isFinite(e.percent) && e.percent >= 0 && e.percent <= 100)) return null;
     return { ...cleanJson(e), id: e.id, mode: modeOf(e.mode), level_id: e.level_id == null ? null : e.level_id };
   },
+  demonlist: (o) => (isObj(o) && idOk(o.level_id) && (o.source === 'aredl' || o.source === 'youtube') ? { level_id: o.level_id, mode: modeOf(o.mode), source: o.source } : null),
   notifications: (id) => (typeof id === 'string' && id && id.length <= 200 ? id : (typeof id === 'number' && Number.isFinite(id) ? String(id) : null)),
 };
 const KEY = {
   favourites: (f) => String(f.level_id),
   lists: (l) => l.id,
   filters: (f) => f.id,
+  demonlist: (o) => String(o.level_id),
   following: (f) => `${f.mode}:${f.level_id}`,
   followNotifications: (n) => n.id,
   personal: (e) => e.id,
   notifications: (id) => id,
 };
-const CAPS = { favourites: 5000, lists: 200, filters: 200, following: 2000, followNotifications: 300, personal: 5000, notifications: 2000 };
+const CAPS = { favourites: 5000, lists: 200, filters: 200, demonlist: 5000, following: 2000, followNotifications: 300, personal: 5000, notifications: 2000 };
 
 // cleans a whole list: { items, dropped }
 function cleanList(kind, raw) {
@@ -194,7 +200,7 @@ function countSources(src) {
   for (const k of KEYS) if (src.settings && k in src.settings && SPEC[k].check(src.settings[k]) !== undefined) settingCount++;
   const n = (kind, list) => cleanList(kind, list).items.length;
   return {
-    settings: settingCount, favourites: n('favourites', src.favourites), lists: n('lists', src.customLists), filters: n('filters', src.savedFilters), following: n('following', src.following),
+    settings: settingCount, favourites: n('favourites', src.favourites), lists: n('lists', src.customLists), filters: n('filters', src.savedFilters), demonlist: n('demonlist', src.thumbOverrides), following: n('following', src.following),
     followNotices: n('followNotifications', src.followNotifications), personal: n('personal', src.personal), notifications: n('notifications', src.clearedNotifications),
   };
 }
@@ -213,6 +219,7 @@ function buildExport(src, { platform, appVersion, sections = SECTION_IDS }) {
   if (want.has('favourites')) doc.data.favourites = cleanList('favourites', src.favourites).items;
   if (want.has('lists')) doc.data.lists = cleanList('lists', src.customLists).items;
   if (want.has('filters')) doc.data.filters = cleanList('filters', src.savedFilters).items;
+  if (want.has('demonlist')) doc.data.demonlist = cleanList('demonlist', src.thumbOverrides).items;
   if (want.has('following')) {
     doc.data.following = cleanList('following', src.following).items;
     doc.data.followNotifications = cleanList('followNotifications', src.followNotifications).items;
@@ -286,6 +293,8 @@ function planImport(doc, { platform }) {
   if (lst.items.length) sections.lists = { available: true, count: lst.items.length, dropped: lst.dropped, items: lst.items };
   const flt = cleanList('filters', data.filters);
   if (flt.items.length) sections.filters = { available: true, count: flt.items.length, dropped: flt.dropped, items: flt.items };
+  const dml = cleanList('demonlist', data.demonlist);
+  if (dml.items.length) sections.demonlist = { available: true, count: dml.items.length, dropped: dml.dropped, items: dml.items };
   const per = cleanList('personal', data.personal);
   if (per.items.length) sections.personal = { available: true, count: per.items.length, dropped: per.dropped, items: per.items };
   const not = cleanList('notifications', data.notifications);

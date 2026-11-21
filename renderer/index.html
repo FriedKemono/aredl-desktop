@@ -76,6 +76,10 @@
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17V10M10 17V4M16 17v-5"/></svg>
       Leaderboard
     </button>
+    <button class="nav-btn" data-tab="packs">
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.8 17 6.2v7.6l-7 3.4-7-3.4V6.2l7-3.4Z"/><path d="M3 6.2 10 9.6l7-3.4M10 9.6v7.6"/></svg>
+      Packs
+    </button>
     <button class="nav-btn" data-tab="profile">
       <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="10" cy="7" r="3.2"/><path d="M3.5 17c1-3.5 4-5 6.5-5s5.5 1.5 6.5 5" stroke-linecap="round"/></svg>
       Profile
@@ -279,6 +283,24 @@
       </div>
       <div class="lb-scroll"><div class="lb-table" id="lbTable"></div></div>
       <div class="lb-pager" id="lbPager"></div>
+    </section>
+
+    <section class="tab" id="tab-packs">
+      <div class="tab-header">
+        <div class="tab-title-row">
+          <h2>Packs <span class="dim-count" id="packsCount"></span></h2>
+          <div class="title-actions">
+            <div class="search-wrap lb-search"><input id="packsSearch" type="text" placeholder="Search packs, tiers or levels" autocomplete="off"></div>
+            <button class="refresh-btn" id="packsRefreshBtn" title="Reload the packs">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 10a6.5 6.5 0 1 1-1.9-4.6"/><path d="M16.5 3.5v3.4h-3.4"/></svg>
+              <span>Refresh</span>
+            </button>
+          </div>
+        </div>
+        <p class="dim" style="margin:0;">Groups of levels that award bonus points when every level is beaten. Open a pack to see its levels.</p>
+      </div>
+      <div id="packsState" class="state"></div>
+      <div id="packsList"></div>
     </section>
 
     <section class="tab" id="tab-changelog">
@@ -487,6 +509,25 @@
             </div>
           </div>
           <div class="setting-line">
+            <div class="setting-label"><strong>Level picture</strong><small>The picture the backdrop and the profile banners use for each level. AREDL’s is the picture AREDL shows for the level; YouTube’s is a frame from its video. “My own file” puts one image, GIF or video behind everything. A single level can be switched by right-clicking it.</small></div>
+            <select id="bgSourceSelect">
+              <option value="youtube">YouTube thumbnail</option>
+              <option value="aredl">AREDL picture</option>
+              <option value="custom">My own file</option>
+            </select>
+          </div>
+          <div class="setting-line" id="bgCustomLine" hidden>
+            <div class="setting-label"><strong>Backdrop file</strong><small id="bgCustomName">No file chosen. Images, GIFs and videos work; videos play silently on a loop. The shader still takes its colours from it.</small></div>
+            <div class="toggle-stack">
+              <button class="btn btn-ghost small-btn" id="bgCustomPick">Choose file…</button>
+              <button class="btn btn-ghost small-btn" id="bgCustomClear" hidden>Remove file</button>
+            </div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Picture overwrites</strong><small id="thumbOverrideNote">Levels set to a different picture than the one chosen above.</small></div>
+            <button class="btn btn-ghost small-btn" id="thumbOverridesBtn">Manage…</button>
+          </div>
+          <div class="setting-line">
             <div class="setting-label"><strong>Backdrop style</strong><small id="bgStyleNote">Image is a blurred picture of the level you last looked at. Shader turns that picture’s colours into soft floating bubbles.</small></div>
             <select id="bgStyleSelect">
               <option value="image">Image</option>
@@ -497,7 +538,7 @@
             <div class="setting-line slider-line">
               <div class="setting-label"><strong>Shader speed</strong><small>How fast the bubbles drift. At 0% they stand still, and the shader stops using any processing power. The mark is the default (100%).</small></div>
               <div class="slider-wrap">
-                <input type="range" id="shaderSpeedSlider" min="0" max="400" step="5" data-suffix="%" data-default="100">
+                <input type="range" id="shaderSpeedSlider" min="0" max="1000" step="5" data-suffix="%" data-default="100">
                 <output id="shaderSpeedOut"></output>
                 <button class="btn btn-ghost small-btn" id="shaderSpeedReset">Reset</button>
               </div>
@@ -541,6 +582,10 @@
             <div class="setting-label"><strong>Tabs in the top bar</strong><small>Moves the tabs out of the side bar and into the title bar.</small></div>
             <label class="checkbox-wrap"><input type="checkbox" id="navTopToggle"> Show in top bar</label>
           </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Menu button for extra tabs</strong><small>Adds a small ⋯ button that tucks tabs away so the bar doesn't get crowded. In the top bar, drop tabs onto it while reordering. With the tabs in the side bar, the button sits above Settings and a tab is moved in or out by right-clicking it.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="navMenuToggle"> Use a menu button</label>
+          </div>
         <div id="navTopOptions" hidden>
           <div class="setting-line">
             <div class="setting-label"><strong>Tab names in the top bar</strong><small>Icons-only tabs expand when you hover them.</small></div>
@@ -549,10 +594,6 @@
               <option value="always">Icons only (hover to expand)</option>
               <option value="fullscreen">Icons only in fullscreen</option>
             </select>
-          </div>
-          <div class="setting-line">
-            <div class="setting-label"><strong>Menu button for extra tabs</strong><small>Adds a small button to the top bar. Tabs you drop into it (while reordering) tuck away inside, so the bar doesn't get crowded.</small></div>
-            <label class="checkbox-wrap"><input type="checkbox" id="navMenuToggle"> Use a menu button</label>
           </div>
           <div class="setting-line">
             <div class="setting-label"><strong>Order and side of the tabs</strong><small>Drag tabs around, and drop them on the left, the right, or into the menu button.</small></div>
@@ -575,6 +616,7 @@
               <option value="personal">Personal list</option>
               <option value="changelog">Changelog</option>
               <option value="leaderboard">Leaderboard</option>
+              <option value="packs">Packs</option>
               <option value="profile">Profile</option>
               <option value="submissions">Submissions</option>
               <option value="notifications">Notifications</option>
@@ -667,6 +709,37 @@
               <div class="transfer-checks" id="syncParts"></div>
               <label class="checkbox-wrap"><input type="checkbox" id="syncAuto"> Save changes to the folder automatically</label>
             </div>
+          </div>
+          <div class="setting-sep" id="syncTimingSep" hidden><span>Automatic timing</span></div>
+          <div class="setting-line" id="syncSaveLine" hidden>
+            <div class="setting-label"><strong>Save to Google Drive</strong><small>How long the app waits between saving your changes to the folder. Nothing is sent when nothing has changed. The app also saves once when it closes.</small></div>
+            <select id="syncSaveSelect">
+              <option value="1">Every minute</option>
+              <option value="2">Every 2 minutes</option>
+              <option value="5">Every 5 minutes</option>
+              <option value="10">Every 10 minutes</option>
+              <option value="15">Every 15 minutes</option>
+              <option value="30">Every 30 minutes</option>
+              <option value="60">Every hour</option>
+              <option value="0">Only when the app closes</option>
+            </select>
+          </div>
+          <div class="setting-line" id="syncCheckLine" hidden>
+            <div class="setting-label"><strong>Check for changes</strong><small>How long the app waits between looking in the folder for changes made on another computer. Anything found waits for you to press Sync now.</small></div>
+            <select id="syncCheckSelect">
+              <option value="1">Every minute</option>
+              <option value="2">Every 2 minutes</option>
+              <option value="5">Every 5 minutes</option>
+              <option value="10">Every 10 minutes</option>
+              <option value="15">Every 15 minutes</option>
+              <option value="30">Every 30 minutes</option>
+              <option value="60">Every hour</option>
+              <option value="0">Only at start-up</option>
+            </select>
+          </div>
+          <div class="setting-line" id="syncLinkLine" hidden>
+            <div class="setting-label"><strong>Same time for both</strong><small>Saving and checking use the save time above, in one request.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="syncLinked"> Link them</label>
           </div>
           <div class="setting-line" id="syncResultLine" hidden>
             <div class="transfer-result" id="syncResult" role="status" aria-live="polite"></div>
@@ -851,6 +924,7 @@
 <script src="releases.js"></script>
 <script src="app.js"></script>
   <script src="features.js"></script>
+  <script src="packs.js"></script>
 <script src="tour.js"></script>
 <script src="whatsnew.js"></script>
 </body>

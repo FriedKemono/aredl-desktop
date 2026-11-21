@@ -1,3 +1,26 @@
+async function attachSubmissionBg(item, i) {
+  const levelId = subLevelId(item);
+  if (!levelId) return;
+  try {
+    const css = await bannerPicCss(levelId, async () => {
+      let detail = detailCache.get(levelId);
+      if (!detail) {
+        detail = await window.aredl.getLevelDetail(levelId, subMode(item));
+        detailCache.set(levelId, detail);
+      }
+      return vidOfDetail(detail);
+    });
+    if (!css) return;
+    const card = document.getElementById(`sub-${i}`);
+    if (card) {
+      card.classList.add('has-bg');
+      card.style.setProperty('--bg-thumb', css);
+    }
+  } catch {
+    // no original video available - leave the card with its plain background
+  }
+}
+
 // If anything throws during top-level script execution, show it instead of
 // silently leaving a blank/non-functional app - this is exactly the failure
 // mode a missing element or a typo'd id causes, and it's otherwise invisible.
@@ -120,6 +143,7 @@ function showTab(name) {
   if (name === 'personal') loadPersonal().then(renderPersonal);
   if (name === 'list' || name === 'submissions') requestAnimationFrame(redockIdleSlots);
   if (name === 'leaderboard' && !lbState.data) loadLeaderboard(1);
+  if (name === 'packs' && typeof loadPacksPage === 'function') loadPacksPage();
   if (name === 'profile' && !state.profileOpenedOnce) {
     state.profileOpenedOnce = true;
     if (state.signedIn) $('#myProfileBtn').click();
@@ -552,15 +576,24 @@ function applyNavPlacement() {
     (menuOn ? left : left.concat(menu)).forEach(t => place(t, $('#topNavLeft')));
     right.forEach(t => place(t, $('#topNavRight')));
     if (menuOn) menu.forEach(t => place(t, $('#topNavMenu')));
+    $('#navMore').classList.remove('side');
     $('#topStatus').appendChild(status);
   } else {
     NAV_BTNS.forEach(b => {
       b.removeAttribute('title');
       if (b.dataset.tab !== 'settings') sidebar.insertBefore(b, spacer);
     });
+    if (appSettings.navMenu) { // the menu button also works with the tabs in the side bar: it sits above Settings, its tabs open beside it
+      const more = $('#navMore');
+      more.classList.add('side');
+      sidebar.insertBefore(more, spacer);
+      currentNavLayout().menu.filter(t => t !== 'settings').forEach(t => { const b = navBtnOf(t); if (b) $('#topNavMenu').appendChild(b); });
+    } else {
+      $('#navMore').classList.remove('side');
+      $('#topNav').insertBefore($('#navMore'), $('#topNavRight')); // the menu button goes home (and stays hidden)
+    }
     sidebar.appendChild(navBtnOf('settings'));
     sidebar.appendChild(status);
-    $('#topNav').insertBefore($('#navMore'), $('#topNavRight')); // the menu button goes home (and stays hidden)
   }
   // reordering only exists for the top bar: the side bar is a plain list of tabs
   const reorder = $('#navReorderBtn');
@@ -591,6 +624,19 @@ $('#updateCheckBtn').addEventListener('click', async () => {
   } catch { out.textContent = "Couldn't check for updates."; }
   btn.disabled = false;
 });
+// side bar: right-click a tab to tuck it into the menu button, or bring it back out
+document.addEventListener('contextmenu', (e) => {
+  const b = e.target.closest && e.target.closest('.sidebar .nav-btn, .nav-more.side .nav-more-panel .nav-btn');
+  if (!b || document.body.classList.contains('nav-top') || !appSettings.navMenu || b.dataset.tab === 'settings') return;
+  e.preventDefault();
+  const inMenu = !!b.closest('#topNavMenu');
+  showContextMenu(e.clientX, e.clientY, [{ label: inMenu ? 'Move out of the menu' : 'Move into the menu', onClick: () => {
+    const { left, right, menu } = currentNavLayout();
+    const next = inMenu ? menu.filter(t => t !== b.dataset.tab) : menu.concat(b.dataset.tab);
+    setSetting('navLayout', { left, right, menu: next });
+    applyNavPlacement();
+  } }]);
+});
 $('#navMenuToggle').addEventListener('change', () => {
   setSetting('navMenu', $('#navMenuToggle').checked);
   applyNavPlacement();
@@ -612,7 +658,7 @@ function setNavMore(open) {
 }
 function closeNavMore() { if (navMoreEl.classList.contains('open')) setNavMore(false); }
 function syncNavMore() {
-  const on = !!appSettings.navMenu && document.body.classList.contains('nav-top');
+  const on = !!appSettings.navMenu; // in the top bar, or beside the side bar's tabs
   navMoreEl.hidden = !on;
   if (!on) closeNavMore();
   updateNavIndicators(false);
@@ -767,6 +813,7 @@ function navShowMarker(t) {
 }
 function navDragStart(e) {
   const item = navDrag.item;
+  const tipEl = document.getElementById('tip'); if (tipEl) tipEl.classList.remove('show'); // a tooltip already showing goes away as the drag starts
   navDrag.started = true;
   const src = item.id === 'navMore' ? navMoreBtn : item; // the ⋯ button is dragged as just the button
   const r = src.getBoundingClientRect();
@@ -1232,6 +1279,9 @@ function applyAppearance() {
 
 async function initSettings() {
   try { appSettings = (await window.aredl.getSettings()) || {}; } catch { appSettings = {}; }
+  await loadThumbOverrides();
+  try { customBg = await window.aredl.bgInfo(); } catch { /* no custom backdrop */ }
+  if (customBg.on) setPageBackground(null); // a chosen backdrop shows from the start, before any level is opened
   applyRawVisibility();
   $('#adaptiveTint').value = Number.isFinite(appSettings.adaptiveTint) ? appSettings.adaptiveTint : 30;
   $('#adaptiveMethod').value = appSettings.adaptiveMethod === 'vivid' ? 'vivid' : 'gamma';
@@ -1281,7 +1331,7 @@ function wireRefreshButton(id, fn) {
 const MODES = ['classic', 'platformer'];
 const modeLabel = (m) => (m === 'platformer' ? 'Platformer' : 'Classic');
 const modeStore = Object.fromEntries(MODES.map(m => [m, { levels: [], completedIds: new Set(), completionField: null, loaded: false, loading: null }]));
-const tabModes = { list: 'classic', favourites: 'all', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'all', changelog: 'classic', leaderboard: 'classic' }; // 'all' = both lists together (only Favourites and Submissions offer it)
+const tabModes = { list: 'classic', favourites: 'all', followed: 'classic', personal: 'classic', profile: 'classic', submissions: 'all', changelog: 'classic', leaderboard: 'classic', packs: 'classic' }; // 'all' = both lists together (only Favourites and Submissions offer it)
 const levelsOf = (mode) => modeStore[mode || 'classic'].levels;
 const levelOf = (mode, levelId) => levelsOf(mode).find(l => String(l.level_id) === String(levelId));
 const anyLevel = (levelId) => levelOf('classic', levelId) || levelOf('platformer', levelId); // a level id only ever belongs to one list
@@ -3206,13 +3256,23 @@ function setLbBoard(value, { push = true } = {}) {
   loadLeaderboard(1);
   if (push) pushNavState();
 }
+// A page-number box: only digits can be typed, and the number is held between 1 and the last page while typing
+// (typing a 9 in a 6-page list gives 6). An empty box is fine until it is left or Enter is pressed.
+function clampPageBox(input, max) {
+  if (!input) return;
+  const digits = String(input.value).replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '');
+  if (!digits) { input.value = ''; return; }
+  const n = Math.min(Number(digits), Math.max(1, max || 1));
+  const next = String(Math.max(1, n));
+  if (input.value !== next) { const atEnd = input.selectionStart === input.value.length; input.value = next; if (atEnd) input.setSelectionRange(next.length, next.length); }
+}
 function renderLbPager(pages, per) {
   const p = lbState.page;
   $('#lbPager').innerHTML = pages > 1
     ? `<button class="btn btn-ghost" data-lb-page="1" ${p <= 1 ? 'disabled' : ''} title="First page" aria-label="First page">«</button>
        <button class="btn btn-ghost" data-lb-page="${p - 1}" ${p <= 1 ? 'disabled' : ''}>‹ Previous</button>
        <span class="lb-page-info">Page
-         <input class="lb-page-input" id="lbPageInput" type="number" min="1" max="${pages}" value="${p}" aria-label="Go to page">
+         <input class="lb-page-input" id="lbPageInput" type="text" inputmode="numeric" autocomplete="off" value="${p}" aria-label="Go to page">
          / ${pages} · ${per} per page</span>
        <button class="btn btn-ghost" id="lbGoBtn" title="Go to that page">Go</button>
        <button class="btn btn-ghost" data-lb-page="${p + 1}" ${p >= pages ? 'disabled' : ''}>Next ›</button>
@@ -3271,6 +3331,8 @@ $('#lbPager').addEventListener('click', (e) => {
   else if (e.target.closest('#lbGoBtn')) lbGoToTyped();
 });
 $('#lbPager').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'lbPageInput') lbGoToTyped(); });
+$('#lbPager').addEventListener('input', (e) => { if (e.target.id === 'lbPageInput') clampPageBox(e.target, lbState.pages); });
+$('#lbPager').addEventListener('focusout', (e) => { if (e.target.id === 'lbPageInput' && !e.target.value) e.target.value = lbState.page; }); // left empty: back to the current page
 function lbGoToTyped() {
   const n = Math.round(Number($('#lbPageInput').value));
   if (!Number.isFinite(n)) return;
@@ -3301,7 +3363,16 @@ function levelMenuItems(level) {
     { label: fav ? 'Remove from favourites' : 'Add to favourites', onClick: () => toggleFavourite(level) },
     { label: isFollowing(level.level_id) ? 'Unfollow level' : 'Follow level', onClick: () => toggleFollow(level) },
     { label: 'Add to a list…', onClick: () => window.fx && fx.openListsMenu(level) },
+    { separator: true },
+    ...pictureMenuItems(level),
   ];
+}
+// the picture this level uses as its backdrop: switch it for this level, or go back to the setting
+function pictureMenuItems(level) {
+  const now = thumbSourceOf(level.level_id), own = thumbOverrides.has(String(level.level_id));
+  const items = [{ label: now === 'aredl' ? 'Use YouTube’s picture for this level' : 'Use AREDL’s picture for this level', onClick: () => setThumbOverride(level, now === 'aredl' ? 'youtube' : 'aredl') }];
+  if (own) items.push({ label: 'Use the default picture for this level', onClick: () => setThumbOverride(level, null) });
+  return items;
 }
 
 function hideContextMenu() {
@@ -3515,6 +3586,81 @@ document.addEventListener('click', (e) => {
 // while you move between tabs. It only changes when a new level's video loads.
 // ---- Adaptive Glass: the accent colour follows the backdrop ----
 let currentBgVid = null;
+
+// ---- where a level's picture comes from ----
+// YouTube's thumbnail of its video, AREDL's own picture of the level (published by AREDL, for every level), or one custom file.
+// A picture is named by a key: a YouTube id, 'a:<level id>' for AREDL's, or 'custom'.
+const AREDL_THUMBS = 'https://raw.githubusercontent.com/All-Rated-Extreme-Demon-List/Thumbnails/main';
+let thumbOverrides = new Map();   // level id -> 'youtube' | 'aredl' (chosen for one level; wins over the setting)
+const aredlMissing = new Set();   // level ids AREDL has no picture for (found out by one failed load, never asked for again)
+const picFallback = new Map();    // 'a:<id>' -> the YouTube id to show if AREDL has no picture
+let customBg = { on: false, has: false, type: null, name: '', ver: 0 }; // the custom backdrop file (an image, GIF or video)
+const thumbDefault = () => (appSettings && appSettings.bgSource === 'aredl' ? 'aredl' : 'youtube');
+const thumbSourceOf = (levelId) => thumbOverrides.get(String(levelId)) || thumbDefault();
+const picIsAredl = (key) => typeof key === 'string' && key.startsWith('a:');
+function picKey(levelId, vid) { // the picture to use for a level (null = none)
+  if (customBg.on) return 'custom';
+  if (levelId != null && thumbSourceOf(levelId) === 'aredl' && !aredlMissing.has(String(levelId))) { const k = `a:${levelId}`; if (vid) picFallback.set(k, vid); return k; }
+  return vid || null;
+}
+function picUrl(key, kind = 'full') { // kind: 'full' (the whole picture) or 'cards' (AREDL's wide strip, made for banners)
+  if (key === 'custom') return `/_bg/current?v=${customBg.ver}`;
+  if (picIsAredl(key)) return `${AREDL_THUMBS}/levels/${kind}/${encodeURIComponent(key.slice(2))}.webp`;
+  return `https://img.youtube.com/vi/${key}/hqdefault.jpg`;
+}
+// loads a picture and hands over something that can be drawn (a custom video gives one frame of itself)
+function withPic(key, onOk, onFail) {
+  if (key === 'custom' && customBg.type === 'video') {
+    const v = document.createElement('video');
+    v.muted = true; v.preload = 'auto'; v.playsInline = true;
+    v.onloadeddata = () => { try { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); } catch { onOk(v, v.videoWidth, v.videoHeight); } };
+    v.onseeked = () => onOk(v, v.videoWidth, v.videoHeight);
+    v.onerror = () => onFail();
+    v.src = picUrl(key);
+    return;
+  }
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => onOk(img, img.width, img.height);
+  img.onerror = () => onFail();
+  img.src = picUrl(key);
+}
+// the CSS background for a banner (profile / submission): AREDL's strip, else YouTube's thumbnail of the video
+async function bannerPicCss(levelId, getVid, kind = 'cards') {
+  if (thumbSourceOf(levelId) === 'aredl' && !aredlMissing.has(String(levelId))) {
+    const key = `a:${levelId}`;
+    const ok = await new Promise(res => { const i = new Image(); i.onload = () => res(true); i.onerror = () => res(false); i.src = picUrl(key, kind); });
+    if (ok) return `url(${picUrl(key, kind)})`;
+    aredlMissing.add(String(levelId));
+  }
+  const vid = await getVid();
+  return vid ? `url(${picUrl(vid)})` : null;
+}
+async function loadThumbOverrides() {
+  try {
+    const list = await window.aredl.getStore('thumb-overrides');
+    thumbOverrides = new Map((Array.isArray(list) ? list : []).filter(o => o && o.level_id != null && (o.source === 'aredl' || o.source === 'youtube')).map(o => [String(o.level_id), o.source]));
+  } catch { thumbOverrides = new Map(); }
+}
+function saveThumbOverrides() {
+  const list = [...thumbOverrides].map(([id, source]) => { const l = anyLevel(id); return { level_id: Number(id) || id, mode: l ? modeOfLevel(l) : 'classic', source }; });
+  window.aredl.setStore('thumb-overrides', list).catch(() => {});
+}
+// after a choice (or an import / sync) changes: what is on screen is drawn again from the right picture
+function refreshPictures() {
+  bgShownVid = null;
+  const sel = state.selectedId != null ? state.levels.find(l => l.id === state.selectedId) : null;
+  if (sel && document.getElementById('tab-list').classList.contains('active')) setPageBackground(picKey(sel.level_id, currentVidOfLevel(sel.level_id)));
+  if (typeof refreshProfileBanners === 'function') refreshProfileBanners();
+}
+const levelVidCache = new Map(); // level id -> YouTube id of its video (known once its detail was looked at)
+const currentVidOfLevel = (levelId) => levelVidCache.get(String(levelId)) || null;
+function setThumbOverride(level, source) { // source: 'youtube' | 'aredl' | null (back to the setting)
+  if (source) thumbOverrides.set(String(level.level_id), source); else thumbOverrides.delete(String(level.level_id));
+  saveThumbOverrides();
+  refreshPictures();
+  showToast(source ? `${level.name} now uses ${source === 'aredl' ? 'AREDL’s' : 'YouTube’s'} picture.` : `${level.name} uses the default picture.`);
+}
 const adaptiveCache = new Map();
 const ADAPTIVE_DEFAULT = '#7dd3fc';
 
@@ -3551,9 +3697,7 @@ function thumbnailColours(vid) {
   const key = `${method}:${vid}`;
   if (adaptiveCache.has(key)) return Promise.resolve(adaptiveCache.get(key));
   return new Promise(resolve => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
+    withPic(vid, (img) => {
       try {
         const c = document.createElement('canvas');
         c.width = 48; c.height = 36;
@@ -3587,9 +3731,7 @@ function thumbnailColours(vid) {
         if (out) adaptiveCache.set(key, out);
         resolve(out);
       } catch { resolve(null); } // image not readable (cross-origin) - keep the default
-    };
-    img.onerror = () => resolve(null);
-    img.src = `https://i.ytimg.com/vi/${vid}/hqdefault.jpg`;
+    }, () => resolve(null));
   });
 }
 // text colour that reads on top of the accent colour
@@ -3727,16 +3869,15 @@ function shaderDefaultColours() {
 function shaderRegions(vid) {
   if (shaderCache.has(vid)) return Promise.resolve(shaderCache.get(vid));
   return new Promise(resolve => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
+    withPic(vid, (img, iw, ih) => {
       try {
         const B = 6, W = SHADER_COLS * B, H = SHADER_ROWS * B; // 48 x 36 pixels: six per region, side to side
         const cv = document.createElement('canvas');
         cv.width = W; cv.height = H;
         const g = cv.getContext('2d', { willReadFrequently: true });
         // YouTube thumbnails have black bars top and bottom: sample only the picture itself
-        g.drawImage(img, 0, img.height * 0.125, img.width, img.height * 0.75, 0, 0, W, H);
+        if (/^[\w-]{11}$/.test(vid) && !picIsAredl(vid) && vid !== 'custom') g.drawImage(img, 0, ih * 0.125, iw, ih * 0.75, 0, 0, W, H); // (AREDL's pictures and a custom file have no bars)
+        else g.drawImage(img, 0, 0, iw, ih, 0, 0, W, H);
         const d = g.getImageData(0, 0, W, H).data;
         const out = [];
         for (let r = 0; r < SHADER_ROWS; r++) for (let q = 0; q < SHADER_COLS; q++) {
@@ -3750,9 +3891,7 @@ function shaderRegions(vid) {
         shaderCache.set(vid, out);
         resolve(out);
       } catch { resolve(null); } // a picture the browser won't let us read
-    };
-    img.onerror = () => resolve(null);
-    img.src = `https://img.youtube.com/vi/${vid}/hqdefault.jpg`;
+    }, () => resolve(null));
   });
 }
 function shaderEnsure() {
@@ -3856,6 +3995,7 @@ document.addEventListener('visibilitychange', shaderSync);
 window.addEventListener('resize', () => { if (shader.cv && document.body.classList.contains('bg-shader')) { shaderResize(); shaderSync(); } });
 
 function setPageBackground(vid) {
+  if (customBg.on) vid = 'custom'; // one chosen backdrop, whichever level is open
   currentBgVid = vid || null;
   if (document.body.classList.contains('bg-shader')) shaderSetVid(currentBgVid);
   adaptAccent(currentBgVid);
@@ -3864,22 +4004,40 @@ function setPageBackground(vid) {
   if (!vid) {
     bgToken++;
     bgShownVid = null;
-    layers.forEach(l => l.classList.remove('on'));
+    layers.forEach(l => { l.classList.remove('on'); l.querySelectorAll('video').forEach(v => v.remove()); });
     return;
   }
-  if (vid === bgShownVid) return; // already showing this picture
+  const shownKey = vid === 'custom' ? `custom:${customBg.ver}` : vid;
+  if (shownKey === bgShownVid) return; // already showing this picture
   const token = ++bgToken;
-  const url = `https://img.youtube.com/vi/${vid}/hqdefault.jpg`;
+  const show = (apply) => {
+    const next = layers[1 - bgFront], prev = layers[bgFront];
+    next.querySelectorAll('video').forEach(v => v.remove());
+    apply(next);
+    next.classList.add('on');
+    prev.classList.remove('on');
+    prev.querySelectorAll('video').forEach(v => { try { v.pause(); } catch { /* going away */ } });
+    bgFront = 1 - bgFront;
+    bgShownVid = shownKey;
+  };
+  if (vid === 'custom' && customBg.type === 'video') { // a looping, silent video behind everything
+    const v = document.createElement('video');
+    v.muted = true; v.loop = true; v.autoplay = true; v.playsInline = true; v.preload = 'auto';
+    v.onloadeddata = () => { if (token !== bgToken) return; show((layer) => { layer.style.backgroundImage = 'none'; layer.appendChild(v); }); v.play().catch(() => {}); };
+    v.src = picUrl('custom');
+    return;
+  }
+  const url = picUrl(vid);
   // load the picture first, then fade it in over the old one - no blank flash while it downloads
   const img = new Image();
   img.onload = () => {
     if (token !== bgToken) return; // a newer level was chosen meanwhile
-    const next = layers[1 - bgFront], prev = layers[bgFront];
-    next.style.backgroundImage = `url(${url})`;
-    next.classList.add('on');
-    prev.classList.remove('on');
-    bgFront = 1 - bgFront;
-    bgShownVid = vid;
+    show((layer) => { layer.style.backgroundImage = `url(${url})`; });
+  };
+  img.onerror = () => { // AREDL has no picture for this level: its YouTube one is used instead (and AREDL isn't asked again)
+    if (token !== bgToken || !picIsAredl(vid)) return;
+    aredlMissing.add(vid.slice(2));
+    setPageBackground(picFallback.get(vid) || null);
   };
   img.src = url;
 }
@@ -3902,6 +4060,7 @@ function videoStageHtml(multi) {
     <div id="panelVideoZone"${multi ? ' class="multi-video-zone"' : ''}></div>
     <button class="multi-nav" data-multi-nav="1" title="Next level" aria-label="Next level">&gt;</button>
     <div class="multi-caption" id="multiCaption"></div>
+    ${multi ? '' : '<div class="level-packs" id="levelPacks" hidden></div>'}
   </div>`;
 }
 
@@ -4342,6 +4501,7 @@ function renderMultiSelection() {
           <div class="stat-plain"><div class="stat-label">GDDL Tier</div><div class="stat-value" id="multiGddl">—</div></div>
         </div>
         <div id="multiCreditsZone"></div>
+        <div id="multiPacksZone" class="multi-packs-zone"></div>
         <div id="panelHistoryZone"></div>`;
     const oldTitle = document.querySelector('#detailInner > .detail-title');
     if (stageEl && oldTitle) {
@@ -4364,6 +4524,7 @@ function renderMultiSelection() {
     $('#multiPoints').textContent = formatPoints(totalPoints);
     $('#multiEnj').textContent = enj;
   }
+  if (typeof renderMultiPacks === 'function') renderMultiPacks();
 
   let settled = false; // true once every lookup has finished (so unresolved ids show a plain label)
   let creatorsSettled = false;
@@ -4572,6 +4733,16 @@ function saveMiniPrefs() {
   setSetting('miniPlayer', { x: pos ? Math.round(pos.x) : null, y: pos ? Math.round(pos.y) : null, width: miniPrefs.width });
 }
 
+let floatCtx = null;      // the video that is out in the floating player window (and how to get back to its level)
+let pendingResume = null; // where to carry on when a video comes back from the floating player
+window.aredl.onMiniReturned((d) => {
+  const f = floatCtx;
+  floatCtx = null;
+  if (!f || f.vid !== d.vid) return;
+  pendingResume = { vid: d.vid, time: d.time, playing: d.playing };
+  if (f.onReturn) f.onReturn();
+});
+window.aredl.onMiniClosed(() => { floatCtx = null; });
 class VideoDock {
   constructor() {
     this.el = document.getElementById('dockTemplate').content.firstElementChild.cloneNode(true);
@@ -4581,13 +4752,27 @@ class VideoDock {
     this.title = ''; this.onReturn = null;
     this.playing = false; this.stateKnown = false; this.assumePlaying = false; this.paused = false;
     this.mode = 'off'; this.leaveSince = 0; this.hiddenByLeave = false; this.lastCss = ''; this.animateNext = false;
-    this.animTimer = null; this.lastPing = 0; this.dragging = false; this.parkedAt = 0;
+    this.animTimer = null; this.lastPing = 0; this.dragging = false; this.parkedAt = 0; this.time = 0;
     docks.add(this);
     this.frame.addEventListener('load', () => this.ping());
     this.wire();
     if (!dockLoopRunning) { dockLoopRunning = true; requestAnimationFrame(dockLoop); }
   }
 
+  // the player leaves the app: a window of its own opens where the pointer is, at the same moment of the video
+  popOut(screenX, screenY) {
+    if (!this.vid || !docks.has(this)) return;
+    const body = [...document.body.classList].filter(c => c !== 'nav-editing').join(' ');
+    const payload = {
+      vid: this.vid, time: this.time || 0, playing: this.isPlaying(), title: this.title,
+      width: Math.round(this.el.getBoundingClientRect().width), screenX: Math.round(screenX), screenY: Math.round(screenY),
+      rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: body,
+    };
+    floatCtx = { vid: this.vid, onReturn: this.onReturn };
+    this.dragging = false;
+    this.destroy();
+    window.aredl.miniOpen(payload).then(ok => { if (!ok) floatCtx = null; }).catch(() => { floatCtx = null; });
+  }
   ping() {
     this.lastPing = Date.now();
     try { this.frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*'); } catch { /* not ready */ }
@@ -4600,8 +4785,15 @@ class VideoDock {
 
   load(vid, autoplay) {
     this.vid = vid;
+    let start = '';
+    if (pendingResume && pendingResume.vid === vid) { // coming back from the floating player: same moment, same state
+      if (pendingResume.time > 1) start = `&start=${Math.floor(pendingResume.time)}`;
+      autoplay = autoplay || pendingResume.playing;
+      this.time = pendingResume.time || 0;
+      pendingResume = null;
+    }
     this.playing = false; this.stateKnown = false; this.assumePlaying = !!autoplay; this.paused = false;
-    this.frame.src = `https://www.youtube.com/embed/${vid}?origin=${encodeURIComponent(location.origin)}${autoplay ? '&autoplay=1' : ''}&enablejsapi=1`;
+    this.frame.src = `https://www.youtube.com/embed/${vid}?origin=${encodeURIComponent(location.origin)}${autoplay ? '&autoplay=1' : ''}${start}&enablejsapi=1`;
   }
   attach(slot, ctx) {
     this.slot = slot;
@@ -4776,6 +4968,8 @@ class VideoDock {
     });
     bar.addEventListener('pointermove', (e) => {
       if (!this.dragging) return;
+      // dragged past the edge of the app: the player carries on as a window of its own, under the pointer
+      if (e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight) { this.popOut(e.screenX - dx, e.screenY - dy); return; }
       el.style.left = (e.clientX - dx) + 'px';
       el.style.top = (e.clientY - dy) + 'px';
     });
@@ -4859,6 +5053,7 @@ window.addEventListener('message', (e) => {
   let data = e.data;
   if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
   if (!data) return;
+  if (data.event === 'infoDelivery' && data.info && typeof data.info.currentTime === 'number') d.time = data.info.currentTime;
   let st = null;
   if (data.event === 'onStateChange' && typeof data.info === 'number') st = data.info;
   else if (data.event === 'infoDelivery' && data.info && typeof data.info.playerState === 'number') st = data.info.playerState;
@@ -4870,6 +5065,7 @@ window.addEventListener('message', (e) => {
 });
 // A video started playing: a leftover corner/hidden player goes away at once (no animation).
 function onDockStartedPlaying(d) {
+  if (floatCtx) { floatCtx = null; window.aredl.miniClose(); } // one video at a time: the floating player closes
   [...docks].forEach(o => {
     if (o === d) return;
     // a corner / hidden player disappears at once (no animation); one still on a page just pauses
@@ -4940,7 +5136,8 @@ function playVideo(url, ctx = {}) {
 function renderLevelDetail(data) {
   const video = findYoutubeUrl(data);
   const vid = video ? youtubeThumbId(video) : null;
-  setPageBackground(vid);
+  if (vid) levelVidCache.set(String(data.level_id), vid);
+  setPageBackground(picKey(data.level_id, vid));
 
   // The verification video is the one thing allowed to render inside the
   // app rather than opening externally, per the user - everything else
@@ -4948,6 +5145,7 @@ function renderLevelDetail(data) {
   const listed = state.levels.find(l => String(l.level_id) === String(data.level_id));
   state.detailLoaded = listed ? listed.id : null;
   playVideo(video, { title: (listed && listed.name) || data.name || '', onReturn: () => jumpToLevel(data.level_id) });
+  if (typeof showLevelPacks === 'function') showLevelPacks(data.level_id, (listed && modeOfLevel(listed)) || tabModes.list);
 
   renderPanelCredits(data);
   if (!creatorsDone.has(data.level_id)) { // ask for the creators once; the row appears (under Verifier) when they arrive
@@ -5265,7 +5463,7 @@ function renderRecordsPage() {
 
   $('#recordsPager').innerHTML = totalPages > 1
     ? `<button ${recordsPage <= 1 ? 'disabled' : ''} data-page="prev">Previous</button>
-       <button class="current">${recordsPage}</button>
+       <span class="records-page-info">Page <input class="lb-page-input records-page-input" id="recordsPageInput" data-pages="${totalPages}" type="text" inputmode="numeric" autocomplete="off" value="${recordsPage}" aria-label="Go to page"> / ${totalPages}</span>
        <button ${recordsPage >= totalPages ? 'disabled' : ''} data-page="next">Next</button>`
     : '';
 
@@ -5279,6 +5477,18 @@ $('#recordsPager').addEventListener('click', (e) => {
   renderRecordsPage();
 });
 
+function recordsGoToTyped() {
+  const box = $('#recordsPageInput');
+  if (!box) return;
+  const n = Math.round(Number(box.value));
+  const pages = Math.max(1, Number(box.dataset.pages) || 1);
+  if (!Number.isFinite(n) || !box.value) { box.value = recordsPage; return; }
+  const page = Math.min(Math.max(n, 1), pages);
+  if (page !== recordsPage) { recordsPage = page; renderRecordsPage(); } else box.value = page;
+}
+$('#recordsPager').addEventListener('input', (e) => { if (e.target.id === 'recordsPageInput') clampPageBox(e.target, Number(e.target.dataset.pages) || 1); });
+$('#recordsPager').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'recordsPageInput') recordsGoToTyped(); });
+$('#recordsPager').addEventListener('focusout', (e) => { if (e.target.id === 'recordsPageInput') recordsGoToTyped(); }); // leaving the box goes to the page typed
 let recordsSearchDebounce = null;
 $('#recordsSearch').addEventListener('input', () => {
   clearTimeout(recordsSearchDebounce);
@@ -5720,7 +5930,7 @@ function extractOtherCompletedLevels(data) {
 function packBannerHtml(p) {
   const tierName = p.tier && p.tier.name;
   const tierColor = p.tier && p.tier.color; // a colour or gradient from the API: used as an accent, never behind the text
-  return `<div class="pack-banner"${tierColor ? ` style="--pack-bg:${escapeHtml(tierColor)};"` : ''}>
+  return `<div class="pack-banner pack-card"${p.id ? ` data-pack-id="${escapeHtml(p.id)}" data-pack-mode="${escapeHtml(tabModes.profile)}" tabindex="0" title="View this pack"` : ''}${tierColor ? ` style="--pack-bg:${escapeHtml(tierColor)};"` : ''}>
     <div class="pack-name">${escapeHtml(p.name || 'Pack')}</div>
     ${tierName ? `<div class="pack-tier">${escapeHtml(tierName)}</div>` : ''}
   </div>`;
@@ -5858,6 +6068,7 @@ function renderProfileTab(which) {
 }
 
 const PLAY_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4.6v10.8a.8.8 0 0 0 1.2.7l8.6-5.4a.8.8 0 0 0 0-1.4L8.2 3.9A.8.8 0 0 0 7 4.6Z" fill="currentColor"/></svg>';
+const YT_PLAY_ICON = '<svg viewBox="0 0 68 48" aria-hidden="true"><path d="M66.5 7.7a8.5 8.5 0 0 0-6-6C55.3.3 34 .3 34 .3S12.7.3 7.5 1.7a8.5 8.5 0 0 0-6 6C0 13 0 24 0 24s0 11 1.5 16.3a8.5 8.5 0 0 0 6 6C12.7 47.7 34 47.7 34 47.7s21.3 0 26.5-1.4a8.5 8.5 0 0 0 6-6C68 35 68 24 68 24s0-11-1.5-16.3z" fill="#f00"/><path d="M45 24 27 14v20" fill="#fff"/></svg>';
 const OPEN_ICON = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5 13 10l-5.5 5.5"/></svg>';
 function completedBannerHtml(l, kind = 'completed') {
   const isMe = state.currentProfileId === '__me__';
@@ -5867,12 +6078,12 @@ function completedBannerHtml(l, kind = 'completed') {
     // clicking the banner (or this) just opens the level in the list.
     play = `<div class="c-play c-open" title="View this level">${OPEN_ICON}</div>`;
   } else if (isMe) {
-    play = `<button type="button" class="c-play" data-play-submission="${l.level_id}" title="Open your submission" aria-label="Open your submission">${PLAY_ICON}</button>`;
+    play = `<button type="button" class="c-play" data-play-submission="${l.level_id}" title="Open your submission" aria-label="Open your submission">${YT_PLAY_ICON}</button>`;
   } else {
     const video = state.profileRecordVideos && state.profileRecordVideos.get(String(l.level_id));
     play = video
-      ? `<a class="c-play" href="${escapeHtml(video)}" target="_blank" rel="noopener" title="Watch their completion in your browser" aria-label="Watch their completion" onclick="event.stopPropagation()">${PLAY_ICON}</a>`
-      : `<div class="c-play c-play-none" title="No completion video available" onclick="event.stopPropagation()">${PLAY_ICON}</div>`;
+      ? `<a class="c-play" href="${escapeHtml(video)}" target="_blank" rel="noopener" title="Watch their completion in your browser" aria-label="Watch their completion" onclick="event.stopPropagation()">${YT_PLAY_ICON}</a>`
+      : `<div class="c-play c-play-none" title="No completion video available" onclick="event.stopPropagation()">${YT_PLAY_ICON}</div>`;
   }
   return `<div class="completed-banner" id="cbanner-${l.level_id}" data-jump="${l.level_id}">
     <span class="c-rank">${l.position != null ? '#' + l.position : (l.status || 'Legacy')}</span>
@@ -5937,32 +6148,32 @@ async function fetchDetailCached(levelId, mode = 'classic') {
   return detail;
 }
 
+const vidOfDetail = (detail) => { const url = findYoutubeUrl(detail); return url ? youtubeThumbId(url) : null; };
 async function attachCompletedBannerBg(level) {
   try {
-    const detail = await fetchDetailCached(level.level_id, modeOfLevel(level));
-    const url = findYoutubeUrl(detail);
-    const vid = url ? youtubeThumbId(url) : null;
-    if (!vid) return;
+    const css = await bannerPicCss(level.level_id, async () => vidOfDetail(await fetchDetailCached(level.level_id, modeOfLevel(level))));
+    if (!css) return;
     const el = document.getElementById(`cbanner-${level.level_id}`);
     if (el) {
       el.classList.add('has-bg');
-      el.style.setProperty('--bg-thumb', `url(https://img.youtube.com/vi/${vid}/hqdefault.jpg)`);
+      el.style.setProperty('--bg-thumb', css);
     }
   } catch { /* leave it with the plain background */ }
 }
 
 async function attachProfileBackground(level) {
   try {
-    const detail = await fetchDetailCached(level.level_id, modeOfLevel(level));
-    const url = findYoutubeUrl(detail);
-    const vid = url ? youtubeThumbId(url) : null;
-    if (!vid) return;
+    const css = await bannerPicCss(level.level_id, async () => vidOfDetail(await fetchDetailCached(level.level_id, modeOfLevel(level))), 'full');
+    if (!css) return;
     const page = document.getElementById('profilePage');
     if (page) {
       page.classList.add('has-bg');
-      page.style.setProperty('--bg-thumb', `url(https://img.youtube.com/vi/${vid}/hqdefault.jpg)`);
+      page.style.setProperty('--bg-thumb', css);
     }
   } catch { /* leave it with the plain background */ }
+}
+function refreshProfileBanners() { // the profile's banners after the picture source changed
+  document.querySelectorAll('#profileTabContent .completed-banner').forEach(el => { const l = anyLevel(String(el.dataset.jump)); if (l) attachCompletedBannerBg(l); });
 }
 
 async function lookupProfile(id) {
@@ -6767,7 +6978,7 @@ document.querySelectorAll('input[type=range]').forEach(enhanceSlider);
   const hide = () => { clearTimeout(timer); target = null; tip.classList.remove('show'); };
   const show = (el) => {
     const text = el.dataset.tip;
-    if (!text || !el.isConnected) return;
+    if (!text || !el.isConnected || (typeof navDrag !== 'undefined' && navDrag.item)) return; // none while a tab is being dragged
     tip.textContent = text;
     tip.style.maxWidth = '280px';
     tip.classList.add('show');
@@ -6781,6 +6992,7 @@ document.querySelectorAll('input[type=range]').forEach(enhanceSlider);
     tip.style.top = Math.max(8, top) + 'px';
   };
   document.addEventListener('mouseover', (e) => {
+    if (typeof navDrag !== 'undefined' && navDrag.item) { hide(); return; }
     const el = e.target.closest && e.target.closest('[data-tip]');
     if (el === target) return;
     hide();
@@ -6793,8 +7005,29 @@ document.querySelectorAll('input[type=range]').forEach(enhanceSlider);
   window.addEventListener('blur', hide);
 })();
 
+// ---- the title bar's icon and "logged in" text: shown or hidden. While reordering tabs each gets an on/off switch. ----
+function applyTitlebarToggles() {
+  document.body.classList.toggle('tb-hide-icon', appSettings.tbShowIcon === false);
+  document.body.classList.toggle('tb-hide-status', appSettings.tbShowStatus === false);
+  document.querySelectorAll('.tb-switch').forEach(sw => { const on = appSettings[sw.dataset.tb === 'icon' ? 'tbShowIcon' : 'tbShowStatus'] !== false; sw.classList.toggle('on', on); sw.setAttribute('aria-checked', String(on)); });
+}
+(function titlebarSwitches() {
+  const inner = document.querySelector('.titlebar-inner');
+  const mk = (which, label, before) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'tb-switch'; b.dataset.tb = which; b.setAttribute('role', 'switch');
+    b.innerHTML = `<span class="tb-switch-track"><i></i></span><span class="tb-switch-label">${label}</span>`;
+    b.addEventListener('click', (e) => { e.stopPropagation(); const key = which === 'icon' ? 'tbShowIcon' : 'tbShowStatus'; setSetting(key, appSettings[key] === false); applyTitlebarToggles(); });
+    inner.insertBefore(b, before);
+    return b;
+  };
+  mk('icon', 'Icon', document.querySelector('.titlebar-title'));
+  mk('status', 'Logged in', document.getElementById('topStatus'));
+})();
+
 (async function init() {
   await initSettings();
+  applyTitlebarToggles();
   if (appSettings.startTab && appSettings.startTab !== 'list') showTab(appSettings.startTab);
   await refreshAuthStatus();
   window.appBooted = true; // settings are loaded: tour.js (loaded after this file) starts the first-open tour from this signal

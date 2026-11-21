@@ -42,8 +42,14 @@ function createDrive({ userDataDir, safeStorage, openExternal, request, fileName
   function client() {
     let saved = {};
     try { saved = JSON.parse(fs.readFileSync(clientPath(), 'utf8')); } catch { /* none saved */ }
-    return { clientId: String(saved.clientId || builtin.clientId || '').trim(), clientSecret: String(saved.clientSecret || builtin.clientSecret || '').trim(), builtIn: !saved.clientId && !!builtin.clientId };
+    // A client built into the app always wins: a leftover one saved on this computer (typed in Settings by an older version,
+    // or before the app had its own) must never override it. A saved client is only used when the app has none of its own.
+    const own = String(builtin.clientId || '').trim() && String(builtin.clientSecret || '').trim();
+    if (own) return { clientId: String(builtin.clientId).trim(), clientSecret: String(builtin.clientSecret).trim(), builtIn: true };
+    return { clientId: String(saved.clientId || builtin.clientId || '').trim(), clientSecret: String(saved.clientSecret || builtin.clientSecret || '').trim(), builtIn: false };
   }
+  // a saved client that the built-in one makes useless is deleted, so it can't come back if the built-in one is ever missing
+  try { if (String(builtin.clientId || '').trim() && String(builtin.clientSecret || '').trim()) fs.rmSync(clientPath(), { force: true }); } catch { /* nothing saved */ }
   function setClient(clientId, clientSecret) {
     fs.writeFileSync(clientPath(), JSON.stringify({ clientId: String(clientId || '').trim().slice(0, 200), clientSecret: String(clientSecret || '').trim().slice(0, 200) }));
   }

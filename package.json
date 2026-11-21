@@ -1,6 +1,6 @@
 {
   "name": "aredl-desktop",
-  "version": "1.1.21",
+  "version": "Beta 1.1.3",
   "description": "AREDL Desktop",
   "main": "main.js",
   "author": "you",
@@ -37,6 +37,7 @@
       "drive-config.js",
       "drive-config.local.js",
       "preload.js",
+      "mini-preload.js",
       "renderer/**/*",
       "assets/**/*",
       "package.json"

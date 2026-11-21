@@ -52,6 +52,7 @@ function payloadOf(id, src) {
     case 'favourites': return L('favourites', src.favourites);
     case 'lists': return L('lists', src.customLists);
     case 'filters': return L('filters', src.savedFilters);
+    case 'demonlist': return L('demonlist', src.thumbOverrides);
     case 'personal': return L('personal', src.personal);
     case 'notifications': return L('notifications', src.clearedNotifications);
     case 'following': return { following: L('following', src.following), notices: L('followNotifications', src.followNotifications) };
@@ -67,7 +68,7 @@ function cleanRemote(id, raw) {
       return out;
     }
     case 'following': return { following: transfer.cleanList('following', isObj(raw) ? raw.following : []).items, notices: transfer.cleanList('followNotifications', isObj(raw) ? raw.notices : []).items };
-    case 'favourites': case 'lists': case 'filters': case 'personal': case 'notifications': return transfer.cleanList(id, raw).items;
+    case 'favourites': case 'lists': case 'filters': case 'demonlist': case 'personal': case 'notifications': return transfer.cleanList(id, raw).items;
     default: return null;
   }
 }
@@ -87,7 +88,7 @@ const NEEDS_KEY = 'Sign in with your AREDL API key first. Each API key has its o
 function createSync({ userDataDir, io, now = () => Date.now(), log = console, fileName = () => SYNC_FILE }) {
   const statePath = () => path.join(userDataDir(), 'sync-state.json');
   const backupDir = () => path.join(userDataDir(), 'sync-backups');
-  const defaults = () => ({ folder: null, enabled: false, parts: ['settings', 'favourites', 'lists', 'filters', 'following', 'personal'], hashes: {}, lastSyncAt: null, lastSummary: null });
+  const defaults = () => ({ folder: null, enabled: false, parts: ['settings', 'favourites', 'lists', 'filters', 'demonlist', 'following', 'personal'], hashes: {}, counts: {}, lastSyncAt: null, lastSummary: null });
   let state = null;
   function load() {
     if (state) return state;
@@ -142,6 +143,8 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
     const doc = remote.doc;
     const src = io.source();
     let writeNeeded = false;
+    // 'push' and 'check' never bring anything here on their own (what is waiting is only reported); 'check' also never writes to the folder
+    const passive = mode === 'push' || mode === 'check', canWrite = mode !== 'check';
 
     for (const id of st.parts) {
       const local = payloadOf(id, src), lh = hash(local);
@@ -163,7 +166,7 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
       }
       const rem = rs ? cleanRemote(id, rs.data) : null, rh = rem ? hash(rem) : null;
       const last = st.hashes[id] || null;
-      const push = () => { doc.sections[id] = { updatedAt: new Date(now()).toISOString(), data: local }; st.hashes[id] = lh; writeNeeded = true; result.pushed.push(id); };
+      const push = () => { if (!canWrite) { result.unchanged++; return; } doc.sections[id] = { updatedAt: new Date(now()).toISOString(), data: local }; st.hashes[id] = lh; writeNeeded = true; result.pushed.push(id); };
       const pull = (data) => { io.apply(id, data); st.hashes[id] = hash(payloadOf(id, io.source())); result.pulled.push(id); };
 
       if (!rem) { if (!isEmpty(id, local)) push(); else result.unchanged++; continue; }
@@ -172,7 +175,7 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
       const localChanged = lh !== last, remoteChanged = rh !== last;
       const remoteAt = Date.parse(rs.updatedAt) || 0, localAt = io.mtime(id) || 0;
       if (last === null) { // the two have never matched: combine the lists, let the newer settings win
-        if (mode === 'push') { result.waiting.push(id); continue; }
+        if (passive) { if (canWrite || !isEmpty(id, rem)) result.waiting.push(id); continue; }
         if (isEmpty(id, rem)) { push(); continue; }                 // nothing there yet: this computer's copy starts it
         if (isEmpty(id, local)) { pull(rem); continue; }            // a new computer joining: it gets what is already there
         const merged = mergeBlocks(id, local, rem);
@@ -186,17 +189,47 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
         }
       }
       if (localChanged && !remoteChanged && last !== null) { push(); continue; }
-      if (!localChanged && remoteChanged) { if (mode === 'push') { result.waiting.push(id); continue; } pull(rem); continue; }
+      if (!localChanged && remoteChanged) { if (passive) { result.waiting.push(id); continue; } pull(rem); continue; }
       // both sides changed (or settings that never matched): keep the newer, save the other
-      if (mode === 'push') { result.waiting.push(id); continue; }
+      if (passive) { result.waiting.push(id); continue; }
       if (localAt >= remoteAt) { backup(id, 'replaced-remote', rem); push(); result.conflicts.push({ id, kept: 'this computer' }); }
       else { backup(id, 'replaced-local', local); pull(rem); result.conflicts.push({ id, kept: 'the other computer' }); }
     }
     try { if (writeNeeded) writeRemote(doc); } catch (err) { return { ok: false, error: `Couldn't write to the sync folder (${err.message}).` }; }
-    st.lastSyncAt = result.at;
-    st.lastSummary = { pushed: result.pushed, pulled: result.pulled, merged: result.merged, waiting: result.waiting, conflicts: result.conflicts, mode };
+    if (mode !== 'check') { // what each part held when it was last in step with the folder (the size, to tell a really big change later)
+      st.counts = st.counts && typeof st.counts === 'object' ? st.counts : {};
+      for (const id of st.parts) { try { const pl = payloadOf(id, src); if (st.hashes[id] === hash(pl)) st.counts[id] = countOf(pl); } catch { /* skip */ } }
+    }
+    if (mode !== 'check') { // looking at the folder isn't a sync: it doesn't change when the last one was
+      st.lastSyncAt = result.at;
+      st.lastSummary = { pushed: result.pushed, pulled: result.pulled, merged: result.merged, waiting: result.waiting, conflicts: result.conflicts, mode };
+    }
     save();
     return result;
+  }
+
+  const countOf = (pl) => (Array.isArray(pl) ? pl.length : (isObj(pl) ? Object.keys(pl).length : 0));
+  // the parts whose size changed by a lot since they last matched the folder (many added, or most of it gone): worth asking about
+  function bigChanges() {
+    const st = load();
+    if (!st.folder || !st.enabled || !st.counts) return [];
+    const src = io.source(), out = [];
+    for (const id of st.parts) {
+      if (id === 'settings') continue;
+      const was = st.counts[id];
+      if (!Number.isFinite(was)) continue;
+      let now; try { now = countOf(payloadOf(id, src)); } catch { continue; }
+      const diff = Math.abs(now - was);
+      if ((diff >= 20 && diff >= was * 0.5) || (was >= 10 && now === 0)) out.push({ id, was, now });
+    }
+    return out;
+  }
+  // true when something here differs from what was last saved to the folder (looked at on this computer only: no request is made)
+  function hasLocalChanges() {
+    const st = load();
+    if (!st.folder || !st.enabled) return false;
+    const src = io.source();
+    return st.parts.some(id => { const last = st.hashes[id]; return last == null ? !isEmpty(id, payloadOf(id, src)) : hash(payloadOf(id, src)) !== last; });
   }
 
   // ---- settings of the sync itself ----
@@ -210,7 +243,7 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
   function reset() { const st = load(); st.hashes = {}; st.lastSummary = null; st.lastSyncAt = null; save(); }
   function disconnect() { const st = load(); st.folder = null; st.enabled = false; st.hashes = {}; st.lastSummary = null; save(); return status(); }
 
-  return { syncNow, status, reset, setFolder, setEnabled, setParts, disconnect, _state: load, _hash: hash, SYNC_FILE };
+  return { syncNow, hasLocalChanges, bigChanges, status, reset, setFolder, setEnabled, setParts, disconnect, _state: load, _hash: hash, SYNC_FILE };
 }
 
 module.exports = { createSync, SyncError, SYNC_FILE, NEEDS_KEY, payloadOf, cleanRemote, hash };

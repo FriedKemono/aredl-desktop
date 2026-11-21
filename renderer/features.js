@@ -54,6 +54,109 @@
     return handle;
   }
   fx.closeModal = () => { if (current) current.close(); };
+  fx.openModal = openModal;
+
+  // ---- a really big change is about to be saved to Google Drive by the timer: ask first ----------------------------
+  async function askBigChange({ id, changes }) {
+    for (let i = 0; i < 300 && current; i++) await new Promise(r => setTimeout(r, 1000)); // not on top of a dialog that is open
+    let answered = false;
+    const reply = (ok) => { if (answered) return; answered = true; window.aredl.syncBigAnswer(id, ok); };
+    const m = openModal({ title: 'Save a big change?', persistent: true, onClose: () => reply(false) });
+    m.body.appendChild(el('p', null, 'A lot has changed since the last save to Google Drive. Saving it replaces what is in the folder.'));
+    const list = el('div', 'fx-list');
+    for (const c of changes) {
+      const row = el('div', 'fx-listrow');
+      const name = el('div', 'fx-listname');
+      name.appendChild(el('strong', null, c.label));
+      name.appendChild(el('small', 'dim', `${c.was} → ${c.now} (${c.now >= c.was ? `${c.now - c.was} more` : `${c.was - c.now} fewer`})`));
+      row.appendChild(name); list.appendChild(row);
+    }
+    m.body.appendChild(list);
+    m.body.appendChild(el('p', 'dim', 'If you don’t save, the folder keeps what it has. You can still save any time with Sync now.'));
+    const foot = el('div', 'fx-row');
+    const save = el('button', 'btn small-btn', 'Save it'), keep = el('button', 'btn btn-ghost small-btn', 'Don’t save');
+    save.addEventListener('click', () => { reply(true); m.close(); });
+    keep.addEventListener('click', () => { reply(false); m.close(); });
+    foot.append(save, keep); m.body.appendChild(foot);
+  }
+  window.aredl.onSyncBigChange((d) => askBigChange(d).catch(() => window.aredl.syncBigAnswer(d.id, false)));
+
+  // ---- the level picture: the setting, a custom file, and the per-level overwrites -------------------------------
+  function refreshBackdropSettings() {
+    const sel = $('#bgSourceSelect');
+    if (!sel) return;
+    sel.value = customBg.on ? 'custom' : (appSettings.bgSource === 'aredl' ? 'aredl' : 'youtube');
+    $('#bgCustomLine').hidden = !customBg.on && !customBg.has && sel.value !== 'custom';
+    $('#bgCustomName').textContent = customBg.has ? `${customBg.name || 'A file'} (${customBg.type === 'video' ? 'video, plays silently on a loop' : 'image or GIF'}).` : 'No file chosen. Images, GIFs and videos work; videos play silently on a loop. The shader still takes its colours from it.';
+    $('#bgCustomClear').hidden = !customBg.has;
+    $('#bgCustomPick').textContent = customBg.has ? 'Choose another file…' : 'Choose file…';
+    const n = thumbOverrides.size;
+    $('#thumbOverrideNote').textContent = n ? `${n} level${n === 1 ? ' uses' : 's use'} a different picture than the one chosen above.` : 'No level uses a different picture than the one chosen above.';
+  }
+  fx.refreshBackdropSettings = refreshBackdropSettings;
+  function pictureChanged() { // what the backdrop shows is worked out again
+    adaptiveCache.clear(); shaderCache.clear(); bgShownVid = null;
+    refreshPictures();
+    if (customBg.on) setPageBackground(null);
+    refreshBackdropSettings();
+  }
+  $('#bgSourceSelect').addEventListener('change', async () => {
+    const v = $('#bgSourceSelect').value;
+    if (v === 'custom') {
+      if (!customBg.has) { // nothing chosen yet: ask for the file first
+        const r = await window.aredl.bgPickCustom();
+        if (!r.ok) { if (r.error) showToast(r.error); refreshBackdropSettings(); $('#bgSourceSelect').value = appSettings.bgSource === 'aredl' ? 'aredl' : 'youtube'; return; }
+        customBg = r;
+      } else customBg = await window.aredl.bgSetCustomOn(true);
+    } else {
+      if (customBg.has) customBg = await window.aredl.bgSetCustomOn(false);
+      setSetting('bgSource', v);
+    }
+    pictureChanged();
+  });
+  $('#bgCustomPick').addEventListener('click', async () => {
+    const r = await window.aredl.bgPickCustom();
+    if (!r.ok) { if (r.error) showToast(r.error); return; }
+    customBg = r; pictureChanged();
+  });
+  $('#bgCustomClear').addEventListener('click', async () => { customBg = await window.aredl.bgClearCustom(); pictureChanged(); });
+  $('#thumbOverridesBtn').addEventListener('click', () => openThumbOverrides());
+
+  async function openThumbOverrides() {
+    await bothLevels();
+    const m = openModal({ title: 'Picture overwrites', wide: true, onClose: refreshBackdropSettings });
+    const draw = () => {
+      m.body.innerHTML = '';
+      if (!thumbOverrides.size) { m.body.appendChild(el('p', 'dim', 'No level has its own picture. Right-click a level and choose a different picture to add one.')); return; }
+      m.body.appendChild(el('p', 'dim', 'These levels use a different picture than the one chosen in Settings.'));
+      const rows = [...thumbOverrides].map(([id, source]) => ({ id, source, level: anyLevel(id) }))
+        .sort((a, b) => ((a.level && a.level.position) ?? 1e9) - ((b.level && b.level.position) ?? 1e9));
+      const list = el('div', 'fx-list');
+      for (const r of rows) {
+        const row = el('div', 'fx-listrow');
+        const name = el('div', 'fx-listname');
+        name.appendChild(el('strong', null, r.level ? r.level.name : `Level ${r.id}`));
+        name.appendChild(el('small', 'dim', `${r.level && r.level.position != null ? '#' + r.level.position + ' · ' : ''}${r.source === 'aredl' ? 'AREDL picture' : 'YouTube thumbnail'}`));
+        const flip = el('button', 'btn btn-ghost small-btn', r.source === 'aredl' ? 'Use YouTube’s' : 'Use AREDL’s');
+        const del = el('button', 'btn btn-ghost small-btn', 'Delete');
+        flip.addEventListener('click', () => { thumbOverrides.set(r.id, r.source === 'aredl' ? 'youtube' : 'aredl'); saveThumbOverrides(); refreshPictures(); draw(); });
+        del.addEventListener('click', () => { thumbOverrides.delete(r.id); saveThumbOverrides(); refreshPictures(); draw(); });
+        row.append(name, flip, del);
+        list.appendChild(row);
+      }
+      m.body.appendChild(list);
+      const foot = el('div', 'fx-row');
+      const clear = el('button', 'btn btn-ghost small-btn', 'Clear all');
+      clear.addEventListener('click', () => {
+        if (clear.dataset.sure !== '1') { clear.dataset.sure = '1'; clear.textContent = `Really clear all ${thumbOverrides.size}?`; setTimeout(() => { if (clear.isConnected) { clear.dataset.sure = ''; clear.textContent = 'Clear all'; } }, 4000); return; }
+        thumbOverrides.clear(); saveThumbOverrides(); refreshPictures(); draw();
+      });
+      foot.appendChild(clear);
+      m.body.appendChild(foot);
+    };
+    draw();
+  }
+  fx.openThumbOverrides = openThumbOverrides;
 
   // a one-line question ("Name this list")
   function askName({ title, label, value = '', ok = 'Save' }) {
@@ -233,7 +336,7 @@
     m.isPalette = true; m.box.classList.add('palette'); m.body.classList.add('palette-body');
     const input = el('input', 'fx-input palette-input'); input.type = 'text'; input.placeholder = 'Type a level, player, tab or action…'; input.spellcheck = false; input.setAttribute('aria-label', 'Search');
     const list = el('div', 'palette-list'); list.setAttribute('role', 'listbox');
-    m.body.append(input, list, el('div', 'palette-foot', '↑ ↓ to move · Enter to open · Tab for the first result · Esc to close · ' + keyLabel(paletteKey()) + ' toggles'));
+    m.body.append(input, list, el('div', 'palette-foot', '↑ ↓ to move · Enter to open · Tab to cycle · Esc to close · ' + keyLabel(paletteKey()) + ' toggles'));
     let items = [], sel = 0;
     const draw = () => {
       list.replaceChildren();
@@ -254,7 +357,7 @@
       if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); draw(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); draw(); }
       else if (e.key === 'Enter' && items[sel]) { e.preventDefault(); run(items[sel]); }
-      else if (e.key === 'Tab' && input.value.trim() && items[0]) { e.preventDefault(); run(items[0]); } // Tab opens the first result
+      else if (e.key === 'Tab' && items.length) { e.preventDefault(); sel = (sel + (e.shiftKey ? -1 : 1) + items.length) % items.length; draw(); } // Tab goes down the options (Shift+Tab up), round again at the ends
     });
     refresh(); setTimeout(() => input.focus(), 20);
     bothLevels().then(() => { if (m.overlay.isConnected) refresh(); });
@@ -406,9 +509,10 @@
       const row = el('div', 'fx-row');
       const again = el('button', 'btn small-btn', matches.length > 1 ? 'Another one' : 'Roll again'); again.addEventListener('click', roll);
       const key = (x) => (x.position != null ? x.position : 100000 - (x.points || 0) / 10);
-      const near = (dir) => { // a harder (closer to #1) or easier level, picked from the few nearest ones that match
-        const k = key(l), pool = matches.filter(x => x !== l && (dir < 0 ? key(x) < k : key(x) > k)).sort((a, b) => (dir < 0 ? key(b) - key(a) : key(a) - key(b))).slice(0, 5);
-        return pool;
+      const near = (dir) => { // a harder (closer to #1) or easier level, picked from a few that match a little way off
+        const k = key(l), pool = matches.filter(x => x !== l && (dir < 0 ? key(x) < k : key(x) > k)).sort((a, b) => (dir < 0 ? key(b) - key(a) : key(a) - key(b)));
+        const skip = Math.min(2, pool.length - 1); // jumps a little further than the next level: the 3rd to 7th nearest (fewer when few match)
+        return pool.slice(Math.max(0, skip), Math.max(0, skip) + 5);
       };
       const mk = (label, dir) => { const b = el('button', 'btn btn-ghost small-btn', label); b.disabled = !near(dir).length; b.addEventListener('click', () => { const p = near(dir); if (p.length) { picked = p[Math.floor(Math.random() * p.length)]; lastPicked = String(picked.level_id); renderResult(); } }); return b; };
       const harder = mk('↑ Harder', -1), easier = mk('↓ Easier', 1);
@@ -925,12 +1029,33 @@
     if (res.missing && res.missing.length) lines.push(`Not in the save, left as they are: ${names(res.missing)}.`);
     return { title: res.pulled.length ? 'Loaded from Google Drive.' : 'Nothing to change.', lines };
   }
+  // the two timing dropdowns (shown once a folder is connected); linked = the check time follows the save time
+  async function refreshSyncTiming(show) {
+    for (const id of ['syncTimingSep', 'syncSaveLine', 'syncCheckLine', 'syncLinkLine']) $('#' + id).hidden = !show;
+    if (!show) return;
+    let iv; try { iv = await window.aredl.syncGetIntervals(); } catch { return; }
+    $('#syncSaveSelect').value = String(iv.save);
+    $('#syncCheckSelect').value = String(iv.linked ? iv.save : iv.check);
+    $('#syncLinked').checked = iv.linked;
+    setSelectDisabled($('#syncCheckSelect'), iv.linked);
+    $('#syncCheckLine').classList.toggle('muted', iv.linked);
+  }
+  async function saveSyncTiming(from) {
+    const linked = $('#syncLinked').checked;
+    const save = Number($('#syncSaveSelect').value);
+    let check = Number($('#syncCheckSelect').value);
+    if (linked) check = save;
+    else if (from === 'link') check = save; // unlinking starts both at the same time
+    await window.aredl.syncSetIntervals({ save, check, linked }).catch(() => {});
+    refreshSyncTiming(true);
+  }
   async function refreshSync() {
     let st;
     try { st = await window.aredl.syncStatus(); } catch { return; }
     if (!syncSections.length) { try { syncSections = await window.aredl.transferInfo(); } catch { /* labels fall back to ids */ } }
     $('#syncMoreLine').hidden = !st.folder;
     $('#syncAuto').checked = st.enabled;
+    await refreshSyncTiming(!!st.folder);
     const parts = $('#syncParts'); parts.replaceChildren();
     (syncSections.length ? syncSections : st.parts.map(id => ({ id, label: id, about: '' }))).forEach(sec => {
       const row = el('label', 'transfer-check'); const cb = el('input'); cb.type = 'checkbox'; cb.value = sec.id; cb.checked = st.parts.includes(sec.id);
@@ -1020,6 +1145,9 @@
   }
   function wireSync() {
     $('#syncAuto').addEventListener('change', (e) => window.aredl.syncSetEnabled(e.target.checked));
+    $('#syncSaveSelect').addEventListener('change', () => saveSyncTiming('save'));
+    $('#syncCheckSelect').addEventListener('change', () => saveSyncTiming('check'));
+    $('#syncLinked').addEventListener('change', () => saveSyncTiming('link'));
     $('#syncParts').addEventListener('change', () => window.aredl.syncSetParts([...$('#syncParts').querySelectorAll('input:checked')].map(i => i.value)));
     const runSync = async (choice) => {
       const btn = $('#syncNowBtn'); btn.disabled = true;
@@ -1054,7 +1182,7 @@
     } catch { /* no summary */ }
     window.aredl.onSyncWaiting((parts) => actionToast(`Changes from another computer are waiting (${parts.length} ${parts.length === 1 ? 'part' : 'parts'}).`, 'Sync now', () => { showTab('settings'); setTimeout(() => $('#syncNowBtn').click(), 350); }));
   }
-  fx.onSettingsShown = () => { refreshSync(); $('#songBulkInfo').textContent = songInfoText(); };
+  fx.onSettingsShown = () => { refreshSync(); refreshBackdropSettings(); $('#songBulkInfo').textContent = songInfoText(); };
 
   // ==========================================================================
   // The Demon List Refresh button: a popup with two separate choices that stays open until it is closed
