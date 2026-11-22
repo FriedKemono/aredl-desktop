@@ -581,6 +581,30 @@
           </div>
         </div>
       </div>
+      <div class="settings-card">
+        <h3>Idle screen</h3>
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Idle screen</strong><small>After a while without use, level thumbnails from YouTube fade in one after another, slowly drifting. Any movement, click or key press brings the app straight back as it was.</small></div>
+            <div class="color-wrap">
+              <label class="checkbox-wrap"><input type="checkbox" id="idleOnToggle"> Show when idle</label>
+              <button class="btn btn-ghost small-btn" id="idlePreviewBtn" type="button">Preview</button>
+            </div>
+          </div>
+          <div class="setting-line">
+            <div class="setting-label"><strong>Idle time before it starts</strong><small>At least 30 seconds. It does not start while a video is playing.</small></div>
+            <select id="idleSecsSelect">
+              <option value="30">30 seconds</option>
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+              <option value="600">10 minutes</option>
+              <option value="900">15 minutes</option>
+              <option value="1800">30 minutes</option>
+            </select>
+          </div>
+        </div>
+      </div>
       <div class="settings-card" id="navCard">
         <h3>Navigation</h3>
         <div class="setting-lines">
@@ -912,20 +936,6 @@
 
 <template id="dockTemplate"><div class="video-dock off">
   <iframe title="Video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-  <div class="mp-bar">
-    <span class="mp-grip" aria-hidden="true"></span>
-    <span class="mp-title"></span>
-    <button class="mp-btn" data-mp="return" title="Back to the level" aria-label="Back to the level"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5L3.5 9.5 8 14"/><path d="M3.5 9.5H12a4.5 4.5 0 0 1 4.5 4.5v1"/></svg></button>
-    <button class="mp-btn" data-mp="close" title="Close player" aria-label="Close player"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
-  </div>
-  <div class="mp-resize" data-edge="tl"></div>
-  <div class="mp-resize" data-edge="tr"></div>
-  <div class="mp-resize" data-edge="bl"></div>
-  <div class="mp-resize" data-edge="br"></div>
-  <div class="mp-resize mp-edge" data-edge="t"></div>
-  <div class="mp-resize mp-edge" data-edge="b"></div>
-  <div class="mp-resize mp-edge" data-edge="l"></div>
-  <div class="mp-resize mp-edge" data-edge="r"></div>
 </div>
 </template>
 

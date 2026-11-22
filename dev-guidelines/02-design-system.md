@@ -74,10 +74,10 @@ A labelled divider inside a card is `<div class="setting-sep"><span>Title</span>
 | modals (`.fx-overlay`) | 10010 |
 | tooltips, toasts | 10020 |
 | tour (`#tour`) | 100000 |
-| **corner player** (`.video-dock.mini`) | 2147483000 |
+| **corner player** (`.video-dock.mini`, only inside the corner player window) | 2147483000 |
 | reorder bar (Done button and text) | 2147483600 |
 
-The corner player is above everything except the reorder bar. Do not add anything above 100000 except these.
+The corner player is its own window (see 03-patterns.md), always above every other window; inside the app nothing is drawn for it. Do not add anything above 100000 except these.
 
 ## Motion
 

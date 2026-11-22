@@ -465,6 +465,14 @@ function createWindow() {
       mainWindow.setFullScreen(!mainWindow.isFullScreen());
     }
   });
+  // the idle screen takes the whole screen (title bar and window buttons included) and gives it back as it was found
+  let idleFsWas = null;
+  ipcMain.handle('window:idleFullscreen', async (_e, on) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (on) { if (idleFsWas === null) { idleFsWas = mainWindow.isFullScreen(); if (!idleFsWas) mainWindow.setFullScreen(true); } }
+    else if (idleFsWas !== null) { const was = idleFsWas; idleFsWas = null; if (!was && mainWindow.isFullScreen()) mainWindow.setFullScreen(false); }
+    return true;
+  });
   const sendFullscreen = (on) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:fullscreen', on);
   };
@@ -572,7 +580,8 @@ async function miscFetch(url, options, what) {
   let res;
   try { res = await fetch(url, options); }
   catch (err) { logRequest({ kind: 'misc', what, url, status: null, ok: false, timestamp: startedAt, error: err.message }); throw err; }
-  logRequest({ kind: 'misc', what, url, status: res.status, ok: res.ok || res.status === 404, timestamp: startedAt, error: res.ok ? undefined : `HTTP ${res.status}` });
+  const redirected = !!options && options.redirect === 'manual' && res.status >= 300 && res.status < 400; // a redirect that was asked to be looked at, not followed
+  logRequest({ kind: 'misc', what, url, status: res.status, ok: res.ok || res.status === 404 || redirected, timestamp: startedAt, error: res.ok || redirected ? undefined : `HTTP ${res.status}` });
   return res;
 }
 async function fetchNewgroundsSong(id) {
@@ -1284,7 +1293,7 @@ function setupMacUpdates() {
   const fromUrl = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(repoUrl);
   const pub = (pkg.build || {}).publish || {};
   const owner = fromUrl ? fromUrl[1] : pub.owner, repo = fromUrl ? fromUrl[2] : pub.repo;
-  macUpdater = require('./mac-updater').createMacUpdater({ app, dialog, shell, getWindow: () => mainWindow, owner, repo });
+  macUpdater = require('./mac-updater').createMacUpdater({ app, dialog, shell, getWindow: () => mainWindow, owner, repo, fetchImpl: (url, options, what) => miscFetch(url, options, what || 'Checked GitHub for an update') }); // every request is listed in Settings → Other requests
   return macUpdater.start();
 }
 function setupAutoUpdate() {
@@ -1360,39 +1369,102 @@ app.on('window-all-closed', () => {
 
 
 // ---------------------------------------------------------------------------
-// The floating player: the corner player pulled out of the app into a window of its own.
-// It stays on top of everything (other apps too), can be put anywhere on any screen, keeps playing while the app is
-// minimised, and has no button of its own in the taskbar.
+// The corner player. It is always a window of its own (never part of the app's page), so it never has to change from one kind
+// of player into another while it is being moved:
+//   - it stays on top of everything (other apps too), can be put anywhere on any screen, and has no button in the taskbar
+//   - the app hands a playing video over to it without a gap: the window loads the video muted next to the one in the app, and once
+//     it plays the app tells it the exact moment ("mini:go"), it seeks there and unmutes, and the app's own player stops
+//   - moving and resizing are done here: the cursor is read every few milliseconds and the window follows it, so there is no
+//     message to the page between the pointer and the window to make it lag
 // ---------------------------------------------------------------------------
-let miniWin = null, miniInit = null, miniWidth = 0;
-const MINI_PAD = 28;             // room around the player inside its window: the corner grips and the shadow are drawn there (it is see-through)
-const MINI_MIN = 220, MINI_MAX = 900; // the same limits as the corner player's width
+let miniWin = null, miniInit = null, miniWidth = 0, miniGesture = null;
+const MINI_PAD = 48;             // room around the player inside its window: the corner grips and the shadow are drawn there (it is see-through)
+const MINI_MIN = 220, MINI_MAX = 900; // the same limits the corner player always had
 const clampNum = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
-function closeMiniWindow() { const w = miniWin; miniWin = null; if (w && !w.isDestroyed()) w.destroy(); } // miniWin is cleared first so its 'closed' event isn't taken for the person closing it
-function openMiniWindow(o) {
-  closeMiniWindow();
-  if (!o || typeof o.vid !== 'string' || !/^[\w-]{6,20}$/.test(o.vid)) return false;
-  const w = clampNum(Math.round(Number(miniWidth || o.width) || 340), MINI_MIN, MINI_MAX), h = Math.round(w * 9 / 16);
-  const W = w + MINI_PAD * 2, H = h + MINI_PAD * 2;
-  let pt;
-  if (o.auto && mainWindow && !mainWindow.isDestroyed()) { // app minimised or hidden: it goes to the bottom-right of the screen the app was on
-    const wa = screen.getDisplayMatching(mainWindow.getBounds()).workArea;
-    pt = { x: wa.x + wa.width - w - 16 - MINI_PAD, y: wa.y + wa.height - h - 16 - MINI_PAD };
-  } else pt = { x: Math.round(Number(o.screenX) || 0) - MINI_PAD, y: Math.round(Number(o.screenY) || 0) - MINI_PAD };
-  const wa = screen.getDisplayNearestPoint({ x: pt.x + MINI_PAD, y: pt.y + MINI_PAD }).workArea;
-  const x = clampNum(pt.x, wa.x - MINI_PAD, wa.x + wa.width - W + MINI_PAD), y = clampNum(pt.y, wa.y - MINI_PAD, wa.y + wa.height - H + MINI_PAD);
+const miniHeight = (w) => Math.round(w * 9 / 16);
+function stopMiniGesture() { if (miniGesture) { clearInterval(miniGesture.timer); miniGesture = null; } }
+// The corner player glides between its page's video and its corner: the window's bounds are moved a little every few milliseconds
+// (from/to are the player's own rectangle on the screen; the room around it for grips and shadow is added here).
+let miniAnim = null, miniPlan = null, miniShown = false, miniGliding = false, miniGlideEnd = null;
+function stopMiniAnim() { if (miniAnim) { clearInterval(miniAnim.timer); miniAnim = null; } miniGlideEnd = null; miniGliding = false; }
+const unionRect = (a, b) => { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y }; };
+// The player glides between two places on the screen without the window being resized on every frame (which is what makes it stutter):
+// the window is made big enough to cover both places, the page moves the player inside it with a transform (done by the graphics card,
+// so it is smooth), and when it has arrived the window is put on its final place.
+function miniGlide(win, from, to, ms, { show = false } = {}, done) {
+  stopMiniAnim();
+  miniGliding = true;
+  const u = unionRect(from, to), ox = u.x - MINI_PAD, oy = u.y - MINI_PAD;
+  const rel = (r) => ({ x: r.x - ox, y: r.y - oy, w: r.w, h: r.h });
+  const finish = () => { if (miniGlideEnd !== finish) return; miniGlideEnd = null; miniGliding = false; if (!win.isDestroyed()) done(); };
+  miniGlideEnd = finish;
+  win.setBounds(miniBoundsOf(u));
+  win.webContents.send('mini:glide', { from: rel(from), to: rel(to), ms });
+  setTimeout(() => {
+    if (miniGlideEnd !== finish || win.isDestroyed()) return;
+    if (show) { win.showInactive(); win.setAlwaysOnTop(true, 'screen-saver'); }
+    win.webContents.send('mini:glideGo');
+    setTimeout(finish, ms + 700); // never stay stuck
+  }, show ? 40 : 20);
+}
+// the window appears (once the video in it plays), and glides from where the video was to its corner
+function showMini() {
+  const win = miniWin;
+  if (!win || win.isDestroyed() || miniShown) return;
+  miniShown = true;
+  const plan = miniPlan; miniPlan = null;
+  if (!plan) { win.showInactive(); win.setAlwaysOnTop(true, 'screen-saver'); return; }
+  miniGlide(win, plan.from, plan.to, 300, { show: true }, () => { win.setBounds(miniBoundsOf(plan.to)); win.webContents.send('mini:settle'); });
+}
+function miniBoundsOf(r) { return { x: Math.round(r.x - MINI_PAD), y: Math.round(r.y - MINI_PAD), width: Math.round(r.w + MINI_PAD * 2), height: Math.round(r.h + MINI_PAD * 2) }; }
+// a rectangle of the app's page (CSS pixels) as a rectangle on the screen, or null when it can't be placed (app hidden or minimised, odd values)
+function miniRectOf(r) {
+  const mw = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  if (!mw || !mw.isVisible() || mw.isMinimized() || !r || typeof r !== 'object') return null;
+  const v = [r.left, r.top, r.width, r.height].map(Number);
+  if (!v.every(Number.isFinite) || v[2] < 40 || v[3] < 20 || v[2] > 4000 || v[3] > 4000) return null;
+  const cb = mw.getContentBounds(), z = mw.webContents.getZoomFactor() || 1;
+  return { x: Math.round(cb.x + v[0] * z), y: Math.round(cb.y + v[1] * z), w: Math.round(v[2] * z), h: Math.round(v[3] * z) };
+}
+function closeMiniWindow() { stopMiniGesture(); stopMiniAnim(); miniPlan = null; const w = miniWin; miniWin = null; if (w && !w.isDestroyed()) w.destroy(); } // miniWin is cleared first so its 'closed' event isn't taken for the person closing it
+const miniPrefs = () => { const v = loadSettings().miniPlayer; return v && typeof v === 'object' ? v : {}; };
+// width travels with the settings; the position (sx, sy: where the player's top-left corner is on the screen) stays on this computer
+const saveMiniPrefs = (patch) => { try { saveSettings({ miniPlayer: { x: null, y: null, ...miniPrefs(), ...patch } }); } catch { /* not saved this time */ } };
+// the player's rectangle put inside the screen it is on; with snap, it sticks to an edge or corner it was let go close to
+function miniFit(x, y, w, h, snap) {
+  const wa = screen.getDisplayNearestPoint({ x: Math.round(x + w / 2), y: Math.round(y + h / 2) }).workArea;
+  const SNAP = 26, M = 16;
+  let nx = clampNum(x, wa.x, wa.x + wa.width - w), ny = clampNum(y, wa.y, wa.y + wa.height - h);
+  if (snap) {
+    if (nx - wa.x < SNAP) nx = wa.x + M; else if (wa.x + wa.width - (nx + w) < SNAP) nx = wa.x + wa.width - w - M;
+    if (ny - wa.y < SNAP) ny = wa.y + M; else if (wa.y + wa.height - (ny + h) < SNAP) ny = wa.y + wa.height - h - M;
+  }
+  return { x: Math.round(nx), y: Math.round(ny) };
+}
+// where the corner player goes: the last place it was put; otherwise the bottom-right of the app (or of its screen when the app is minimised or hidden)
+function miniPlace() {
+  const saved = miniPrefs();
+  const w = clampNum(Math.round(Number(miniWidth || saved.width) || 340), MINI_MIN, MINI_MAX), h = miniHeight(w);
   miniWidth = w;
-  miniInit = {
-    vid: o.vid, time: Number(o.time) || 0, playing: !!o.playing, title: String(o.title || '').slice(0, 300), pad: MINI_PAD,
-    rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000),
-  };
-  miniWin = new BrowserWindow({
-    width: W, height: H, x, y, show: false, transparent: true, backgroundColor: '#00000000',
+  const mw = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  let pt = { x: 0, y: 0 };
+  if (Number.isFinite(saved.sx) && Number.isFinite(saved.sy)) pt = { x: saved.sx, y: saved.sy };
+  else if (mw && mw.isVisible() && !mw.isMinimized()) { const cb = mw.getContentBounds(); pt = { x: cb.x + cb.width - w - 16, y: cb.y + cb.height - h - 16 }; }
+  else if (mw) { const wa = screen.getDisplayMatching(mw.getBounds()).workArea; pt = { x: wa.x + wa.width - w - 16, y: wa.y + wa.height - h - 16 }; }
+  return { w, h, at: miniFit(pt.x, pt.y, w, h, false) };
+}
+const validVid = (v) => typeof v === 'string' && /^[\w-]{6,20}$/.test(v);
+const miniInitOf = (o, w, extra) => ({
+  vid: o.vid, time: Number(o.time) || 0, playing: !!o.playing, handover: o.handover === true, title: String(o.title || '').slice(0, 300), pad: MINI_PAD, width: w,
+  rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000), ...extra,
+});
+function makeMiniWindow(at, w, h) {
+  const win = new BrowserWindow({
+    width: w + MINI_PAD * 2, height: h + MINI_PAD * 2, x: at.x - MINI_PAD, y: at.y - MINI_PAD, show: false, transparent: true, backgroundColor: '#00000000',
     frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, hasShadow: false,
     skipTaskbar: true, alwaysOnTop: true, title: 'AREDL Desktop',
     webPreferences: { preload: path.join(__dirname, 'mini-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
-  const win = miniWin;
   win.setAlwaysOnTop(true, 'screen-saver'); // above full-screen windows and other apps
   win.setSkipTaskbar(true);
   if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true); // on every desktop (without hiding the Dock icon)
@@ -1400,49 +1472,142 @@ function openMiniWindow(o) {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.on('closed', () => {
-    if (miniWin === win) { miniWin = null; if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed'); }
+    if (miniWarm && miniWarm.win === win) { clearTimeout(miniWarm.timer); miniWarm = null; }
+    if (miniWin === win) { stopMiniGesture(); miniWin = null; if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed'); }
   });
   win.loadURL(`http://127.0.0.1:${localServerPort}/mini.html`);
+  return win;
+}
+// A hidden corner player kept ready for the video that is playing in the app (its page and its YouTube player are already loaded, paused),
+// so that handing the video over only has to seek and play instead of starting a window and a player from nothing.
+let miniWarm = null; // { win, vid, ready, init, timer }
+function dropWarm() { const w = miniWarm; miniWarm = null; if (w) { clearTimeout(w.timer); if (!w.win.isDestroyed()) w.win.destroy(); } }
+function warmMini(o) {
+  if (!o || !validVid(o.vid) || miniWin) { if (!miniWin) dropWarm(); return false; }
+  if (miniWarm && miniWarm.vid === o.vid && !miniWarm.win.isDestroyed()) { clearTimeout(miniWarm.timer); miniWarm.timer = setTimeout(dropWarm, 15 * 60 * 1000); return true; }
+  dropWarm();
+  const { w, h, at } = miniPlace();
+  const win = makeMiniWindow(at, w, h);
+  miniWarm = { win, vid: o.vid, ready: false, init: miniInitOf(o, w, { warm: true, playing: false, handover: false, time: Number(o.time) || 0 }), timer: setTimeout(dropWarm, 15 * 60 * 1000) };
+  return true;
+}
+ipcMain.handle('mini:warm', async (_e, o) => warmMini(o));
+function openMiniWindow(o) {
+  closeMiniWindow();
+  if (!o || !validVid(o.vid)) return false;
+  const { w, h, at } = miniPlace();
+  const fromRect = o.auto === true ? null : miniRectOf(o.from); // where the video was on the page: the window starts there and glides to the corner
+  miniPlan = fromRect ? { from: fromRect, to: { x: at.x, y: at.y, w, h } } : null;
+  miniShown = false;
+  miniInit = miniInitOf(o, w);
+  if (miniWarm && miniWarm.ready && miniWarm.vid === o.vid && !miniWarm.win.isDestroyed()) { // the ready one takes the video over
+    const win = miniWarm.win; clearTimeout(miniWarm.timer); miniWarm = null;
+    miniWin = win;
+    win.setBounds({ x: at.x - MINI_PAD, y: at.y - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
+    win.webContents.send('mini:init', { ...miniInit, promote: true });
+    return true;
+  }
+  dropWarm();
+  miniWin = makeMiniWindow(at, w, h);
   return true;
 }
 const fromMini = (e) => !!miniWin && !miniWin.isDestroyed() && e.sender === miniWin.webContents;
+const toApp = (channel, data) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data); };
 ipcMain.handle('mini:open', async (_e, o) => openMiniWindow(o));
-ipcMain.on('mini:ready', (e) => {
+ipcMain.on('mini:ready', (e) => { // the window's page has loaded: it gets what to show and appears without taking the keyboard from what you were doing
+  if (miniWarm && !miniWarm.win.isDestroyed() && e.sender === miniWarm.win.webContents) { miniWarm.ready = true; miniWarm.win.webContents.send('mini:init', miniWarm.init); return; }
   if (fromMini(e) && miniInit) {
-    miniWin.webContents.send('mini:init', miniInit);
-    miniWin.showInactive(); // appears without taking the keyboard from what you were doing
-    miniWin.setAlwaysOnTop(true, 'screen-saver');
+    miniWin.webContents.send('mini:init', miniInit); // (the window stays hidden until its video plays, so there is never an empty window on screen)
   }
 });
-ipcMain.on('mini:move', (e, x, y) => { // dragged by its top bar
-  if (!fromMini(e) || !Number.isFinite(x) || !Number.isFinite(y)) return;
-  const [w, h] = miniWin.getSize();
-  miniWin.setBounds({ x: Math.round(x), y: Math.round(y), width: w, height: h });
+ipcMain.on('mini:glideDone', (e) => { if (fromMini(e) && miniGlideEnd) miniGlideEnd(); });
+ipcMain.on('mini:primed', (e) => {
+  if (!fromMini(e)) return;
+  const wait = miniPlan && !miniShown ? 90 : 0; // the app's player stays until the window is really on screen over it
+  showMini();
+  if (wait) setTimeout(() => toApp('mini:primed'), wait); else toApp('mini:primed');
+}); // its video plays (muted): the app can say which moment to carry on from
+ipcMain.on('mini:go', (_e, g) => { // the app's reply: the moment to carry on from; the window seeks there and unmutes
+  if (!miniWin || miniWin.isDestroyed() || !g || typeof g !== 'object') return;
+  miniWin.webContents.send('mini:go', { time: Math.max(0, Number(g.time) || 0), playing: g.playing === true });
 });
-ipcMain.on('mini:resize', (e, b) => { // resized from a corner or edge: the player's own rectangle (the window is that plus the room around it)
-  if (!fromMini(e) || !b) return;
-  const w = clampNum(Math.round(Number(b.width) || MINI_MIN), MINI_MIN, MINI_MAX), h = Math.round(w * 9 / 16);
-  if (!Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y))) return;
-  miniWidth = w;
-  miniWin.setBounds({ x: Math.round(Number(b.x)) - MINI_PAD, y: Math.round(Number(b.y)) - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
+// Moving and resizing: the page says when the pointer went down on the bar or a grip and when it came up; in between the window follows the cursor.
+ipcMain.on('mini:gesture', (e, g) => {
+  if (!fromMini(e) || !g || (g.kind !== 'move' && g.kind !== 'resize')) return;
+  stopMiniGesture();
+  if (miniGliding) return; // (a glide only lasts a moment)
+  const win = miniWin, c0 = screen.getCursorScreenPoint(), b0 = win.getBounds();
+  const w0 = miniWidth, h0 = miniHeight(w0), left0 = b0.x + MINI_PAD, top0 = b0.y + MINI_PAD;
+  let tick;
+  if (g.kind === 'move') {
+    const W = w0 + MINI_PAD * 2, H = h0 + MINI_PAD * 2;
+    let lx = null, ly = null;
+    tick = () => {
+      const p = screen.getCursorScreenPoint(), x = left0 - MINI_PAD + p.x - c0.x, y = top0 - MINI_PAD + p.y - c0.y;
+      if (x === lx && y === ly) return;
+      lx = x; ly = y;
+      win.setBounds({ x, y, width: W, height: H }); // the size is given every time, so it can't drift when crossing screens with a different scale
+    };
+  } else {
+    const edge = String(g.edge || '');
+    if (!/^(tl|tr|bl|br|t|b|l|r)$/.test(edge)) return;
+    const sx = edge.includes('l') ? -1 : edge.includes('r') ? 1 : 0, sy = edge.includes('t') ? -1 : edge.includes('b') ? 1 : 0; // which way is "outwards"
+    const wa = screen.getDisplayNearestPoint({ x: Math.round(left0 + w0 / 2), y: Math.round(top0 + h0 / 2) }).workArea;
+    let lw = 0;
+    tick = () => {
+      const p = screen.getCursorScreenPoint();
+      const byX = (p.x - c0.x) * sx, byY = (p.y - c0.y) * sy * (16 / 9); // a 16:9 picture grows with both pulls
+      const grow = !sy ? byX : !sx ? byY : (Math.abs(byX) >= Math.abs(byY) ? byX : byY);
+      const roomX = sx < 0 ? left0 + w0 - wa.x - 8 : wa.x + wa.width - 8 - left0; // the most room there is on the side it grows towards
+      const roomY = (sy < 0 ? top0 + h0 - wa.y - 8 : wa.y + wa.height - 8 - top0) * 16 / 9;
+      const w = Math.round(clampNum(w0 + grow, MINI_MIN, Math.max(MINI_MIN, Math.min(MINI_MAX, roomX, roomY))));
+      if (w === lw) return;
+      lw = w;
+      const h = miniHeight(w);
+      miniWidth = w;
+      win.setBounds({ x: (sx < 0 ? left0 + w0 - w : left0) - MINI_PAD, y: (sy < 0 ? top0 + h0 - h : top0) - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
+    };
+  }
+  miniGesture = { kind: g.kind, timer: setInterval(() => { if (miniWin !== win || win.isDestroyed()) stopMiniGesture(); else tick(); }, 8) };
+});
+ipcMain.on('mini:gestureEnd', (e) => {
+  if (!fromMini(e)) return;
+  const kind = miniGesture && miniGesture.kind;
+  stopMiniGesture();
+  const b = miniWin.getBounds(), w = miniWidth, h = miniHeight(w);
+  const at = miniFit(b.x + MINI_PAD, b.y + MINI_PAD, w, h, kind === 'move'); // kept on a screen; sticks to an edge only if let go very close to it
+  if (at.x !== b.x + MINI_PAD || at.y !== b.y + MINI_PAD || b.width !== w + MINI_PAD * 2) miniWin.setBounds({ x: at.x - MINI_PAD, y: at.y - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
+  saveMiniPrefs({ width: w, sx: at.x, sy: at.y });
 });
 ipcMain.on('mini:close-self', (e) => {
   if (!fromMini(e)) return;
   closeMiniWindow();
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed');
+  toApp('mini:closed');
 });
-ipcMain.on('mini:return', (e, st) => { // Back to the level
+// "Back to the level" (or the app asking for it). The window stays and keeps playing: the app starts its own player at the same moment
+// and closes this one ("mini:close") once that plays, so the video never stops in between.
+ipcMain.on('mini:return', (e, st) => {
   if (!fromMini(e)) return;
-  const d = { vid: String((st && st.vid) || ''), time: Number(st && st.time) || 0, playing: !!(st && st.playing) };
-  closeMiniWindow();
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  const d = { vid: String((st && st.vid) || '').slice(0, 20), time: Math.max(0, Number(st && st.time) || 0), playing: !!(st && st.playing), quiet: !!(st && st.quiet) };
+  if (!d.quiet && mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show(); mainWindow.focus();
-    mainWindow.webContents.send('mini:returned', d);
   }
+  toApp('mini:returned', d);
 });
-ipcMain.handle('mini:close', async () => { closeMiniWindow(); return true; }); // another video started in the app
-ipcMain.handle('mini:requestReturn', async () => { if (miniWin && !miniWin.isDestroyed()) miniWin.webContents.send('mini:requestReturn'); return true; });
+// another video started in the app, or the app took the video back (then it says where its player is: the window glides there first)
+ipcMain.handle('mini:close', async (_e, o) => {
+  const win = miniWin, to = o && typeof o === 'object' ? miniRectOf(o.to) : null;
+  if (to && win && !win.isDestroyed() && win.isVisible()) {
+    stopMiniGesture();
+    const b = win.getBounds();
+    miniGlide(win, { x: b.x + MINI_PAD, y: b.y + MINI_PAD, w: b.width - MINI_PAD * 2, h: b.height - MINI_PAD * 2 }, to, 260, {}, () => { if (miniWin === win) closeMiniWindow(); });
+    return true;
+  }
+  closeMiniWindow();
+  return true;
+});
+ipcMain.handle('mini:requestReturn', async (_e, quiet) => { if (miniWin && !miniWin.isDestroyed()) miniWin.webContents.send('mini:requestReturn', quiet === true); return true; });
 
 let quitSynced = false;
 app.on('before-quit', (e) => {

@@ -224,6 +224,18 @@
     catch { stateEl.style.display = ''; stateEl.textContent = 'The packs couldn’t be loaded. Press Refresh to try again.'; }
   }
   window.loadPacksPage = loadPacksPage;
+  // for the command palette: the pack lists of both modes are loaded quietly (one request each, shared with the Packs tab) and searched here
+  window.prefetchPacks = () => Promise.all(['classic', 'platformer'].map(m => ensureTiers(m).catch(() => null)));
+  window.searchPacks = (query) => {
+    const q = String(query || '').toLowerCase(), out = [];
+    if (!q) return out;
+    ['classic', 'platformer'].forEach(mode => (cachedTiers(mode) || []).forEach(t => (t.packs || []).forEach(p => {
+      const inName = String(p.name || '').toLowerCase().includes(q), inTier = String(t.name || '').toLowerCase().includes(q);
+      const lv = inName || inTier ? null : (p.levels || []).find(l => String(l.name || '').toLowerCase().includes(q));
+      if (inName || inTier || lv) out.push({ id: p.id, mode, name: p.name, tier: t.name, count: (p.levels || []).length, level: lv ? lv.name : '', exact: String(p.name || '').toLowerCase().startsWith(q) });
+    })));
+    return out;
+  };
 
   // the page's controls
   addModeSelect('packs', () => loadPacksPage());

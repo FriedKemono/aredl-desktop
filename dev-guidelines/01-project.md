@@ -5,7 +5,7 @@
 ```
 main.js              Electron main process: windows, tray, IPC handlers, API calls, local file server, song lookups, floating player
 preload.js           the only bridge the page has: window.aredl.* (contextIsolation on)
-mini-preload.js      the same for the floating player window: window.aredlMini.*
+mini-preload.js      the same for the corner player window: window.aredlMini.*
 settings-transfer.js what can be exported/imported and synced: SPEC (settings), SECTIONS (lists), cleaning, combining
 sync.js              Google Drive sync engine (what changed, merge rules, backups, preview)
 drive.js             Google Drive access (sign-in, folder, upload/download)
@@ -20,7 +20,7 @@ renderer/
   tour.js            the guided tour
   whatsnew.js        the "What's new" window
   releases.js        changelog (APP_RELEASES)
-  mini.html/.js      the floating player window
+  mini.html/.js      the corner player window (always a window of its own)
 scripts/             dist.js, ship.js, publish-release.js, release-notes.js, adhoc-sign.js
 ```
 

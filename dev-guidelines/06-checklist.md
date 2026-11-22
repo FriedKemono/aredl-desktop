@@ -3,7 +3,7 @@
 - [ ] Works on Windows **and** Mac (no OS-specific path, no Windows-only API without a guard).
 - [ ] New UI uses existing components and classes; glass themes and Lite mode checked in the CSS.
 - [ ] Anything shown for a level also exists in multi-select.
-- [ ] Every new request is needed, cached, and logged (`miscFetch` / `logPic`). Nothing loads before it is shown.
+- [ ] Every new request is needed, cached, and logged (`miscFetch` / `logPic`). Nothing loads before it is shown (the one exception: what the command palette searches is loaded quietly by `prepareSearch()`).
 - [ ] New data views have a raw-response box.
 - [ ] New setting: wired on start and on change; portable ones are in `SPEC`; local ones are not.
 - [ ] New list the person keeps: store + transfer section + sync part.

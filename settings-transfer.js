@@ -63,6 +63,8 @@ const SPEC = {
   startTab:        { label: 'Start-up tab',            check: oneOf('list', 'favourites', 'followed', 'personal', 'changelog', 'leaderboard', 'packs', 'profile', 'submissions', 'notifications') },
   videoOnLeave:    { label: 'Videos when you leave',   check: oneOf('popup', 'background', 'pause', 'stop') },
   miniPlayer:      { label: 'Corner player size',      check: (v) => (v && typeof v === 'object' && Number.isFinite(v.width) ? { x: null, y: null, width: Math.min(900, Math.max(220, Math.round(v.width))) } : undefined) }, // its position depends on the screen, so only the size travels
+  idleOn:          { label: 'Idle screen',             check: bool },
+  idleSecs:        { label: 'Idle screen delay',       check: (v) => ([30, 60, 120, 300, 600, 900, 1800].includes(v) ? v : undefined) },
   followMins:      { label: 'Followed-level checks',   check: (v) => ([0, 1, 2, 5, 10, 30].includes(v) ? v : undefined) },
   favSort:         { label: 'Favourites sort',         check: oneOf('position', 'list', 'category') },
   plSort:          { label: 'Personal list sort',      check: oneOf('hardest', 'placement', 'date', 'attempts', 'name') },

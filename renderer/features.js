@@ -307,7 +307,7 @@
   function paletteSearch(q) {
     const query = norm(q).trim();
     const acts = paletteActions();
-    if (!query) return acts.slice(0, 14);
+    if (!query) return acts;
     const out = [];
     const scoreText = (text, keys) => { const t = norm(text); if (t === query) return 100; if (t.startsWith(query)) return 80; if (t.includes(query)) return 55; if (keys && norm(keys).includes(query)) return 35; return 0; };
     acts.forEach(a => { const s = scoreText(a.label, a.keys); if (s) out.push({ ...a, score: s + 10 }); });
@@ -321,11 +321,11 @@
       if (!s && songLabelOf(l.song) && norm(songLabelOf(l.song)).includes(query)) s = 30;
       if (s) lv.push({ kind: 'Level', label: l.name, hint: `Opens this level in the Demon List · ${l.position != null ? '#' + l.position + ' · ' : ''}${modeLabel(m)}${s === 30 && l.song > 0 && songLabelOf(l.song) ? ' · ♪ ' + songLabelOf(l.song) : ''}`, score: s, run: () => jumpToLevel(l.level_id) });
     }));
-    lv.sort((a, b) => b.score - a.score).slice(0, 8).forEach(x => out.push(x));
-    players.rows.filter(p => norm(p.name).includes(query)).sort((a, b) => (norm(a.name).startsWith(query) ? 0 : 1) - (norm(b.name).startsWith(query) ? 0 : 1) || a.rank - b.rank).slice(0, 5)
+    lv.sort((a, b) => b.score - a.score).slice(0, 40).forEach(x => out.push(x));
+    players.rows.filter(p => norm(p.name).includes(query)).sort((a, b) => (norm(a.name).startsWith(query) ? 0 : 1) - (norm(b.name).startsWith(query) ? 0 : 1) || a.rank - b.rank).slice(0, 15)
       .forEach(p => out.push({ kind: 'Player', label: p.name, hint: `Opens this player’s profile · #${p.rank} on the leaderboard`, score: 50, run: () => { showTab('profile'); $('#profileLookup').value = p.id; lookupProfile(p.id); } }));
     deepSearch(query).forEach(x => out.push(x));
-    return out.sort((a, b) => b.score - a.score).slice(0, 40);
+    return out.sort((a, b) => b.score - a.score).slice(0, 300);
   }
   // Anything that mentions the typed words: settings, submissions, personal list, notifications, changelogs, favourites, followed levels, lists, level descriptions.
   function snippet(text, q) {
@@ -346,7 +346,7 @@
     };
     const cap = (n) => { let c = 0; return () => ++c <= n; };
     try { // settings: every option and card
-      let ok = cap(8);
+      let ok = cap(25);
       document.querySelectorAll('#tab-settings .setting-line, #tab-settings > .settings-card, #tab-settings .api-logs > .settings-card').forEach(node => {
         if (node.matches('.api-logs .settings-card, .settings-card') && node.querySelector('.setting-line')) return;
         const label = (node.querySelector('.setting-label strong, h3') || {}).textContent || 'Setting', card = node.closest('.settings-card'), cname = card && card.querySelector('h3') ? card.querySelector('h3').textContent : '';
@@ -354,16 +354,65 @@
         if (norm(text).includes(q) && ok()) add('Setting', label.trim(), text, () => { showTab('settings'); setTimeout(() => { node.scrollIntoView({ block: 'center' }); node.classList.add('fx-flash'); setTimeout(() => node.classList.remove('fx-flash'), 1800); }, 250); }, 28, `set:${cname}:${label}`, `Opens this setting · Settings${cname ? ' › ' + cname.trim() : ''}`);
       });
     } catch { /* settings not drawn */ }
-    try { let ok = cap(6); (typeof submissionsData !== 'undefined' ? submissionsData : []).forEach(it => { const text = flat(it); if (norm(text).includes(q) && ok()) add('Submission', subLevelName(it) || 'A level', text, () => { showTab('submissions'); const id = subLevelId(it); if (id != null) jumpToSubmission(id); }, 32, `sub:${subKey(it)}`, `Opens this submission in Submissions${it && it.status ? ' · ' + String(it.status) : ''}`); }); } catch { /* none */ }
-    try { let ok = cap(6); personalList.forEach((e, i) => { const r = plResolve(e), text = `${r.name} ${flat(e)}`; if (norm(text).includes(q) && ok()) add('Personal', r.name || 'Level', text, () => { showTab('personal'); fx.showStats(false); setTimeout(() => plOpen(e), 150); }, 32, `pl:${i}`, `Opens this entry to edit · Personal list · ${plRunText(e)}`); }); } catch { /* none */ }
-    try { let ok = cap(6); notifAll.forEach((n, i) => { const text = flat(n); if (norm(text).includes(q) && ok()) add('Notification', String(n.title || n.message || n.text || n.type || 'Notification').replace(/\s+/g, ' ').slice(0, 60), text, () => showTab('notifications'), 30, `n:${i}`, 'Opens the Notifications tab'); }); } catch { /* none */ }
-    try { let ok = cap(6); changelogEntries.forEach((c, i) => { const text = flat(c); if (norm(text).includes(q) && ok()) add('List changelog', String(describeChange(c, '')).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').slice(0, 60) || 'Changelog entry', text, () => showTab('changelog'), 28, `cl:${i}`, 'Opens the Demon List changelog'); }); } catch { /* none */ }
-    try { let ok = cap(6); APP_RELEASES.forEach(r => r.items.forEach(([, t, ttl], i) => { if (norm(`${r.title} ${ttl || ''} ${t}`).includes(q) && ok()) add('App changelog', ttl || r.title, `${r.title}. ${ttl || ''} ${t}`, () => { showTab('settings'); setTimeout(() => $('#whatsNewBtn').click(), 250); }, 26, `ac:${r.version}:${i}`, `Opens What’s new · app changelog for version ${r.version}`); })); } catch { /* none */ }
-    try { let ok = cap(6); state.favourites.forEach(f => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Favourite', f.name || String(f.level_id), text, () => { fx.view = null; showTab('favourites'); renderFavourites(); }, 33, `fav:${f.level_id}`, 'Opens the Favourites tab'); }); } catch { /* none */ }
-    try { let ok = cap(6); state.following.concat(followNotifs || []).forEach((f, i) => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Followed', f.name || f.level_name || String(f.level_id), text, () => showTab('followed'), 28, `fo:${f.mode || ''}:${f.level_id != null ? f.level_id : i}`, 'Opens the Followed levels tab'); }); } catch { /* none */ }
-    try { let ok = cap(6); (fx.lists || []).forEach(l => l.items.forEach(it => { if (norm(it.name).includes(q) && ok()) add('List item', it.name, `${it.name} in ${l.name}`, () => fx.openList(l.id), 32, `li:${l.id}:${it.level_id}`, `Opens the list ${l.name}`); })); } catch { /* none */ }
-    try { let ok = cap(8); MODES.forEach(m => levelsOf(m).forEach(l => { const tx = levelText(l); if (tx.hay.includes(q) && !tx.name.includes(q) && ok()) add('Level', l.name, `${l.description || ''} ${(l.tags || []).join(' ')}`, () => jumpToLevel(l.level_id), 24, `lv:${l.level_id}`, `Opens this level · matched in its description or tags · ${l.position != null ? '#' + l.position + ' · ' : ''}${modeLabel(m)}`); })); } catch { /* none */ }
+    try { let ok = cap(25); (typeof submissionsData !== 'undefined' ? submissionsData : []).forEach(it => { const text = flat(it); if (norm(text).includes(q) && ok()) add('Submission', subLevelName(it) || 'A level', text, () => { showTab('submissions'); const id = subLevelId(it); if (id != null) jumpToSubmission(id); }, 32, `sub:${subKey(it)}`, `Opens this submission in Submissions${it && it.status ? ' · ' + String(it.status) : ''}`); }); } catch { /* none */ }
+    try { let ok = cap(25); personalList.forEach((e, i) => { const r = plResolve(e), text = `${r.name} ${flat(e)}`; if (norm(text).includes(q) && ok()) add('Personal', r.name || 'Level', text, () => { showTab('personal'); fx.showStats(false); setTimeout(() => plOpen(e), 150); }, 32, `pl:${i}`, `Opens this entry to edit · Personal list · ${plRunText(e)}`); }); } catch { /* none */ }
+    try { let ok = cap(25); notifAll.forEach((n, i) => { const text = flat(n); if (norm(text).includes(q) && ok()) add('Notification', String(n.title || n.message || n.text || n.type || 'Notification').replace(/\s+/g, ' ').slice(0, 60), text, () => showTab('notifications'), 30, `n:${i}`, 'Opens the Notifications tab'); }); } catch { /* none */ }
+    try { let ok = cap(25); changelogEntries.forEach((c, i) => { const text = flat(c); if (norm(text).includes(q) && ok()) add('List changelog', String(describeChange(c, '')).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').slice(0, 60) || 'Changelog entry', text, () => showTab('changelog'), 28, `cl:${i}`, 'Opens the Demon List changelog'); }); } catch { /* none */ }
+    try { let ok = cap(25); APP_RELEASES.forEach(r => r.items.forEach(([, t, ttl], i) => { if (norm(`${r.title} ${ttl || ''} ${t}`).includes(q) && ok()) add('App changelog', ttl || r.title, `${r.title}. ${ttl || ''} ${t}`, () => { showTab('settings'); setTimeout(() => $('#whatsNewBtn').click(), 250); }, 26, `ac:${r.version}:${i}`, `Opens What’s new · app changelog for version ${r.version}`); })); } catch { /* none */ }
+    try { let ok = cap(25); state.favourites.forEach(f => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Favourite', f.name || String(f.level_id), text, () => { fx.view = null; showTab('favourites'); renderFavourites(); }, 33, `fav:${f.level_id}`, 'Opens the Favourites tab'); }); } catch { /* none */ }
+    try { let ok = cap(25); state.following.concat(followNotifs || []).forEach((f, i) => { const text = flat(f); if (norm(text).includes(q) && ok()) add('Followed', f.name || f.level_name || String(f.level_id), text, () => showTab('followed'), 28, `fo:${f.mode || ''}:${f.level_id != null ? f.level_id : i}`, 'Opens the Followed levels tab'); }); } catch { /* none */ }
+    try { let ok = cap(25); (fx.lists || []).forEach(l => l.items.forEach(it => { if (norm(it.name).includes(q) && ok()) add('List item', it.name, `${it.name} in ${l.name}`, () => fx.openList(l.id), 32, `li:${l.id}:${it.level_id}`, `Opens the list ${l.name}`); })); } catch { /* none */ }
+    try { let ok = cap(25); MODES.forEach(m => levelsOf(m).forEach(l => { const tx = levelText(l); if (tx.hay.includes(q) && !tx.name.includes(q) && ok()) add('Level', l.name, `${l.description || ''} ${(l.tags || []).join(' ')}`, () => jumpToLevel(l.level_id), 24, `lv:${l.level_id}`, `Opens this level · matched in its description or tags · ${l.position != null ? '#' + l.position + ' · ' : ''}${modeLabel(m)}`); })); } catch { /* none */ }
+    try { let ok = cap(25); (window.searchPacks ? window.searchPacks(q) : []).forEach(p => { if (ok()) add('Pack', p.name || 'Pack', `${p.name} ${p.tier} ${p.level}`, () => { showTab('packs'); window.openPack(p.id, p.mode); }, p.exact ? 40 : 30, `pk:${p.mode}:${p.id}`, `Opens this pack · ${p.tier} tier · ${plural(p.count, 'level')} · ${modeLabel(p.mode)}${p.level ? ' · contains ' + p.level : ''}`); }); } catch { /* packs not loaded */ }
     return out;
+  }
+  // ---- everything the palette searches is loaded quietly in the background (a few seconds after start-up, and again when the palette opens),
+  // so no page has to be opened once first. Each source asks only once; the Packs, Notifications, Submissions and Changelog pages reuse the answers.
+  const prepared = new Set();
+  function prepareSearch(onChange) {
+    const run = (key, fn) => {
+      if (prepared.has(key)) return null;
+      prepared.add(key);
+      let p; try { p = Promise.resolve(fn()); } catch { p = Promise.resolve(); }
+      return p.catch(() => { prepared.delete(key); }).then(() => { if (onChange) onChange(); });
+    };
+    return Promise.allSettled([
+      run('levels', bothLevels), run('players', loadPlayers), run('personal', loadPersonal), run('followed', () => loadFollowStores()),
+      run('packs', () => (window.prefetchPacks ? window.prefetchPacks() : null)),
+      state.signedIn ? run('notifications', prefetchNotifications) : null,
+      state.signedIn && !state.submissionsLoaded ? run('submissions', loadSubmissions) : null,
+      !state.changelogLoaded ? run('changelog', () => loadChangelog(true)) : null,
+    ].filter(Boolean));
+  }
+  fx.prepareSearch = prepareSearch;
+  { const soon = () => setTimeout(() => prepareSearch(), 3000); if (window.appBooted) soon(); else window.addEventListener('aredl:ready', soon, { once: true }); }
+  // After a result that opens a page of content is chosen, the page is searched for the text that matched: it is scrolled to and the spot is outlined for a moment.
+  const FLASH_KINDS = new Set(['Submission', 'Notification', 'List changelog', 'Favourite', 'Followed', 'List item', 'Level']);
+  const FLASH_ROWS = '.submission-card, .notif-item, .change-entry, .fav-card, .completed-banner, .list-row, .pack-card, .pack-banner';
+  function flashFound(query) {
+    const qn = norm(query).trim();
+    if (qn.length < 2) return;
+    const shown = (e) => !!e && e.getClientRects().length > 0 && !e.closest('.fx-overlay, .sel-pop, .debug-info, [hidden]');
+    const find = () => {
+      const root = document.querySelector('.tab.active') || document.body;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (!n.nodeValue || norm(n.nodeValue).indexOf(qn) < 0) continue;
+        const p = n.parentElement;
+        if (p && !/^(SCRIPT|STYLE|TEXTAREA)$/.test(p.tagName) && shown(p)) return p;
+      }
+      return [...root.querySelectorAll(FLASH_ROWS)].find(r => shown(r) && norm(r.textContent).includes(qn)) || null; // words that span several elements
+    };
+    let tries = 0;
+    const tick = () => {
+      const hit = find();
+      if (!hit) { if (++tries < 14) setTimeout(tick, 200); return; }
+      const target = hit.closest(FLASH_ROWS) || hit;
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target.classList.add('fx-flash');
+      setTimeout(() => target.classList.remove('fx-flash'), 1800);
+    };
+    setTimeout(tick, 300);
   }
   function openPalette(startQuery) {
     const start = typeof startQuery === 'string' ? startQuery.trim().slice(0, 120) : '';
@@ -376,22 +425,27 @@
     const input = el('input', 'fx-input palette-input'); input.type = 'text'; input.placeholder = 'Type a level, player, tab or action…'; input.spellcheck = false; input.setAttribute('aria-label', 'Search');
     const list = el('div', 'palette-list'); list.setAttribute('role', 'listbox');
     m.body.append(input, list, el('div', 'palette-foot', '↑ ↓ to move · Enter to open · Tab to cycle · Esc to close · ' + keyLabel(paletteKey()) + ' toggles'));
-    let items = [], sel = 0;
+    const PAGE = 12; // rows shown at first; the rest appear as you go down
+    let items = [], sel = 0, shown = PAGE;
+    const markSel = () => { list.querySelectorAll('.palette-row').forEach((r, i) => r.classList.toggle('sel', i === sel)); const s = list.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' }); };
     const draw = () => {
       list.replaceChildren();
       if (!items.length) { list.appendChild(el('div', 'palette-empty', input.value ? 'Nothing matches.' : 'Nothing to show yet.')); return; }
-      items.forEach((it, i) => {
+      shown = Math.min(items.length, Math.max(shown, sel + 1));
+      items.slice(0, shown).forEach((it, i) => {
         const row = el('div', 'palette-row' + (i === sel ? ' sel' : '')); row.setAttribute('role', 'option');
         row.append(el('span', 'palette-kind', it.kind), el('span', 'palette-label', it.label), el('span', 'palette-hint', it.hint || ''));
-        row.addEventListener('mousemove', () => { if (sel !== i) { sel = i; draw(); } });
+        row.addEventListener('mousemove', () => { if (sel !== i) { sel = i; markSel(); } });
         row.addEventListener('click', () => run(it));
         list.appendChild(row);
       });
-      const s = list.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' });
+      if (shown < items.length) list.appendChild(el('div', 'palette-more', `▾ ${plural(items.length - shown, 'more result')} · keep going down to see them`));
+      markSel();
     };
-    const run = (it) => { m.close(); try { it.run(); } catch (err) { showToast(`That didn't work: ${errMsg(err)}`); } };
-    const refresh = () => { items = paletteSearch(input.value); sel = 0; draw(); };
-    input.addEventListener('input', refresh);
+    const run = (it) => { const typed = input.value; m.close(); try { it.run(); } catch (err) { showToast(`That didn't work: ${errMsg(err)}`); return; } if (FLASH_KINDS.has(it.kind)) flashFound(typed); };
+    const refresh = (keep) => { const was = keep && sel > 0 ? items[sel] : null; items = paletteSearch(input.value); const at = was ? items.findIndex(x => x.kind === was.kind && x.label === was.label && x.hint === was.hint) : -1; if (at >= 0) sel = at; else { sel = 0; shown = PAGE; } draw(); };
+    input.addEventListener('input', () => { shown = PAGE; refresh(); });
+    list.addEventListener('scroll', () => { if (shown < items.length && list.scrollTop + list.clientHeight >= list.scrollHeight - 4) { shown = Math.min(items.length, shown + PAGE); const top = list.scrollTop; draw(); list.scrollTop = top; } });
     input.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(items.length - 1, sel + 1); draw(); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); draw(); }
@@ -400,8 +454,7 @@
     });
     if (start) input.value = start;
     refresh(); setTimeout(() => { input.focus(); if (start) input.select(); }, 20);
-    bothLevels().then(() => { if (m.overlay.isConnected) refresh(); });
-    loadPlayers().then(() => { if (m.overlay.isConnected && input.value) refresh(); });
+    prepareSearch(() => { if (m.overlay.isConnected) refresh(true); }); // whatever is not loaded yet arrives while the palette is open
   }
   fx.openPalette = openPalette;
   // ---- the key that opens the palette (Settings > Command palette); stored as e.g. "`" or "Mod+k" (Mod = Ctrl, or Cmd on a Mac)
@@ -1280,18 +1333,38 @@
         const d = describeSync(res); syncResultBox('ok', d.title, d.lines); refreshSync();
       } catch (err) { syncResultBox('error', `The sync failed: ${errMsg(err)}`); } finally { btn.disabled = false; }
     };
+    // The comparison as an outline: what the part is, then each kind of difference with its items as sub-points and what each button would do about it.
     function renderSyncChanges(box, res) {
       box.innerHTML = '';
       if (!res || !res.ok) { box.appendChild(el('p', 'dim', (res && res.error) || 'Couldn’t compare.')); return; }
       if (!res.parts.length) { box.appendChild(el('p', 'dim', 'This app and the folder’s save are the same. Nothing would change.')); return; }
-      const cap = (arr) => arr.slice(0, 10).join(', ') + (arr.length > 10 ? ` and ${arr.length - 10} more` : '');
+      const total = (p) => p.onlyHere.length + p.onlyFolder.length + (p.changed || 0);
+      box.appendChild(el('p', 'fx-hint', `${plural(res.parts.length, 'part')} differ between this app and the folder’s save. Nothing has been changed: this is only a comparison.`));
+      const li = (text, cls) => el('li', cls || null, text);
+      const sub = (items, more) => { const ul = el('ul', 'sync-sub'); items.slice(0, 10).forEach(t => ul.appendChild(li(t))); if (items.length > 10) ul.appendChild(li(`…and ${items.length - 10} more`, 'sync-more')); return ul; };
+      const point = (head, items, effects) => { // one kind of difference: a heading, its items, then what each button does
+        const row = li(null, 'sync-point'); row.appendChild(el('span', 'sync-point-head', head));
+        if (items && items.length) row.appendChild(sub(items));
+        const fx2 = el('ul', 'sync-sub sync-effects');
+        effects.forEach(([who, what]) => { const e = li(null); e.append(el('b', null, who + ': '), document.createTextNode(what)); fx2.appendChild(e); });
+        row.appendChild(fx2);
+        return row;
+      };
       for (const p of res.parts) {
+        const one = (p.noun && p.noun[0]) || 'item', many = (p.noun && p.noun[1]) || 'items';
+        const them = (n) => (n === 1 ? 'it' : 'them');
         const card = el('div', 'sync-change');
-        card.appendChild(el('strong', null, p.label));
-        if (p.folderHasNone) card.appendChild(el('div', 'fx-hint', 'The folder has nothing for this yet.'));
-        if (p.onlyHere.length) card.appendChild(el('div', 'fx-hint', `Only in this app (${p.onlyHere.length}): ${cap(p.onlyHere)}. “Save” adds ${p.onlyHere.length === 1 ? 'it' : 'them'} to the folder; “Use the folder’s save” removes ${p.onlyHere.length === 1 ? 'it' : 'them'} here.`));
-        if (p.onlyFolder.length) card.appendChild(el('div', 'fx-hint', `Only in the folder (${p.onlyFolder.length}): ${cap(p.onlyFolder)}. “Use the folder’s save” brings ${p.onlyFolder.length === 1 ? 'it' : 'them'} here; “Save” removes ${p.onlyFolder.length === 1 ? 'it' : 'them'} from the folder.`));
-        if (p.changed) card.appendChild(el('div', 'fx-hint', `Different in both (${p.changed})${p.changedNames && p.changedNames.length ? ': ' + cap(p.changedNames) : ''}. The side you choose wins.`));
+        const head = el('div', 'sync-change-head'); head.append(el('strong', null, p.label), el('span', 'sync-count', p.folderHasNone ? 'not in the folder' : plural(total(p), 'difference')));
+        card.appendChild(head);
+        if (p.about) card.appendChild(el('div', 'fx-hint', `This part holds ${p.about}.`));
+        const ul = el('ul', 'sync-points');
+        if (p.folderHasNone) ul.appendChild(point('The folder has no save of this part yet.', p.onlyHere, [['Save this app to the folder', 'creates it in the folder from what is here.'], ['Use the folder’s save', 'leaves this part here as it is, because the folder has nothing to bring.']]));
+        else {
+          if (p.onlyHere.length) ul.appendChild(point(`Only in this app: ${plural(p.onlyHere.length, one, many)}`, p.onlyHere, [['Save this app to the folder', `adds ${them(p.onlyHere.length)} to the folder.`], ['Use the folder’s save', `removes ${them(p.onlyHere.length)} from this app.`]]));
+          if (p.onlyFolder.length) ul.appendChild(point(`Only in the folder: ${plural(p.onlyFolder.length, one, many)}`, p.onlyFolder, [['Use the folder’s save', `brings ${them(p.onlyFolder.length)} into this app.`], ['Save this app to the folder', `removes ${them(p.onlyFolder.length)} from the folder.`]]));
+          if (p.changed) ul.appendChild(point(`In both, with different content: ${p.changed}`, p.changedNames && p.changedNames.length ? p.changedNames : null, [['Save this app to the folder', 'the folder gets the version from this app.'], ['Use the folder’s save', 'this app gets the version from the folder.']]));
+        }
+        card.appendChild(ul);
         box.appendChild(card);
       }
     }
@@ -1390,4 +1463,139 @@
     fx.renderListBar();
   }
   init();
+})();
+
+// ---------------------------------------------------------------------------
+// Idle screen: after a set time without use, random level thumbnails (YouTube's) fade in full screen, one after another, drifting slowly.
+// It is a layer over the app and changes nothing under it, so any movement, click, scroll or key press removes it at once and the app
+// is exactly as it was (a click or key that ends it is not also passed on to the app).
+// ---------------------------------------------------------------------------
+(() => {
+  const SHOW_MS = 10000;        // how long each picture stays before the next one fades in
+  const el = document.createElement('div');
+  el.className = 'idle-saver'; el.hidden = true;
+  el.innerHTML = '<div class="idle-layer"></div><div class="idle-layer"></div><div class="idle-cap"></div><div class="idle-cap"></div>';
+  document.body.appendChild(el);
+  const layers = [...el.querySelectorAll('.idle-layer')], caps = [...el.querySelectorAll('.idle-cap')], levelOf = [null, null];
+  const offer = document.createElement('div'); // what comes up after the idle screen: view the level that was on screen
+  offer.className = 'idle-offer'; offer.hidden = true;
+  document.body.appendChild(offer);
+  let offerTimer = 0;
+  const hideOffer = () => { clearTimeout(offerTimer); offer.hidden = true; };
+  function showOffer(level) {
+    if (!level) return;
+    offer.textContent = '';
+    const msg = document.createElement('span'), name = document.createElement('b'), btn = document.createElement('button');
+    name.textContent = level.name || 'this level';
+    msg.append('View ', name, ' in the list?');
+    btn.className = 'btn'; btn.textContent = 'View';
+    btn.addEventListener('click', () => { hideOffer(); jumpToLevel(level.level_id, modeOfLevel(level)); });
+    offer.append(msg, btn);
+    offer.hidden = false;
+    clearTimeout(offerTimer); offerTimer = setTimeout(hideOffer, 9000);
+  }
+  document.addEventListener('mousedown', (e) => { if (!offer.hidden && !e.target.closest('.idle-offer')) hideOffer(); }, true);
+  let lastActive = Date.now(), running = false, starting = false, swallowUntil = 0, runId = 0, lastX = null, lastY = null, front = 0;
+  const recent = [];            // the last few levels shown, so the same one doesn't come back at once
+
+  const enabled = () => appSettings.idleOn !== false;
+  const idleMs = () => Math.max(30, Number(appSettings.idleSecs) || 120) * 1000;
+  const videoPlaying = () => { try { return !!(floatCtx || [...docks].some(d => d.isPlaying())); } catch { return false; } };
+
+  function stop() {
+    if (!running) return;
+    const seen = levelOf[front];
+    running = false; runId++;
+    el.classList.remove('on'); el.hidden = true; // straight away, no fade out
+    layers.forEach(l => { l.classList.remove('show'); l.style.backgroundImage = ''; });
+    caps.forEach(c => c.classList.remove('show'));
+    window.aredl.idleFullscreen(false).catch(() => {}); // the window goes back to how it was
+    if (!document.hidden) showOffer(seen);
+  }
+  const activity = (e) => {
+    if (Date.now() < graceUntil) return;
+    if (!running && !starting && !offer.hidden && e && ['keydown', 'wheel'].includes(e.type)) hideOffer();
+    if (e && e.type === 'mousemove') { // a mouse that merely sits still can still report a move after the page changes: only real movement counts
+      const moved = lastX == null || Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY) >= 3;
+      lastX = e.clientX; lastY = e.clientY;
+      if (!moved) return;
+    }
+    const press = !!e && ['mousedown', 'pointerdown', 'keydown', 'touchstart'].includes(e.type);
+    if (!running && e && Date.now() < swallowUntil && ['mouseup', 'click', 'keyup', 'pointerup'].includes(e.type)) { e.stopPropagation(); e.preventDefault(); return; } // the rest of the press that ended it
+    const was = running;
+    lastActive = Date.now();
+    if (was) { stop(); if (press) { swallowUntil = Date.now() + 600; e.stopPropagation(); e.preventDefault(); } }
+  };
+  ['mousemove', 'mousedown', 'pointerdown', 'mouseup', 'click', 'wheel', 'keydown', 'keyup', 'touchstart', 'touchmove', 'contextmenu'].forEach(t => window.addEventListener(t, activity, { capture: true, passive: false }));
+  window.addEventListener('focus', () => { lastActive = Date.now(); });
+  document.addEventListener('visibilitychange', () => { lastActive = Date.now(); if (document.hidden) stop(); });
+
+  async function pickPicture() { // a random level's YouTube thumbnail: { src, level }
+    const pool = (state.levels || []).filter(l => l && l.level_id != null && l.status !== 'Removed');
+    for (let tries = 0; tries < 14 && pool.length; tries++) {
+      const l = pool[Math.floor(Math.random() * pool.length)];
+      if (recent.includes(l.level_id)) continue;
+      let vid = levelVidCache.get(String(l.level_id)) || null;
+      if (!vid) { try { vid = vidOfDetail(await fetchDetailCached(l.level_id, modeOfLevel(l))); } catch { vid = null; } }
+      if (!vid) continue;
+      for (const q of ['maxresdefault', 'hqdefault']) {
+        const src = `https://img.youtube.com/vi/${vid}/${q}.jpg`;
+        const ok = await new Promise(res => { const i = new Image(); i.onload = () => res(i.naturalWidth > 200); i.onerror = () => res(false); i.src = src; });
+        if (ok) { recent.push(l.level_id); if (recent.length > 12) recent.shift(); return { src, level: l }; }
+      }
+    }
+    return null;
+  }
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  function caption(i, level) {
+    levelOf[i] = level;
+    caps[i].textContent = level.name || '';
+    if (level.position != null) { const p = document.createElement('small'); p.textContent = `#${level.position}`; caps[i].append(p); }
+  }
+  function show(layer, src) {
+    const zoomIn = Math.random() < 0.65, s0 = zoomIn ? rnd(1.02, 1.06) : rnd(1.12, 1.18), s1 = zoomIn ? rnd(1.12, 1.18) : rnd(1.02, 1.06);
+    const dir = () => (Math.random() < 0.5 ? -1 : 1) * rnd(1.5, 4);
+    layer.style.cssText = `background-image:url(${src});--s0:${s0};--s1:${s1};--x0:${dir()}%;--y0:${dir() / 2}%;--x1:${dir()}%;--y1:${dir() / 2}%;`;
+    layer.classList.remove('show'); void layer.offsetWidth; layer.classList.add('show'); // (restarts its drift)
+  }
+  let graceUntil = 0;
+  async function start(preview) {
+    const id = ++runId;
+    starting = true;
+    const first = await pickPicture();
+    starting = false;
+    if (id !== runId) return;
+    if (!first) { lastActive = Date.now() - idleMs() + 15000; if (preview) showToast('No level picture could be found right now.'); return; } // nothing to show yet: try again a bit later
+    if (!preview && Date.now() - lastActive < idleMs()) return;
+    if (preview) graceUntil = Date.now() + 1500; // used again while the first picture was being found
+    running = true; el.hidden = false; void el.offsetWidth; el.classList.add('on');
+    window.aredl.idleFullscreen(true).catch(() => {}); // the whole screen, title bar included
+    front = 0; show(layers[0], first.src); caption(0, first.level); caps[0].classList.add('show');
+    let next = pickPicture();
+    while (id === runId) {
+      await new Promise(r => setTimeout(r, SHOW_MS));
+      if (id !== runId) return;
+      const pic = await next;
+      if (id !== runId) return;
+      if (pic) {
+        const back = 1 - front;
+        show(layers[back], pic.src);
+        caption(back, pic.level); caps[back].classList.add('show'); caps[front].classList.remove('show');
+        layers[front].classList.remove('show');
+        front = back;
+      }
+      next = pickPicture(); // the one after is found and loaded while this one is on screen
+    }
+  }
+  setInterval(() => {
+    if (running || starting || !enabled() || document.hidden) return;
+    if (Date.now() - lastActive < idleMs() || videoPlaying()) return;
+    start();
+  }, 1000);
+
+  const pv = document.getElementById('idlePreviewBtn');
+  if (pv) pv.addEventListener('click', () => { if (!running && !starting) start(true); });
+  const on = document.getElementById('idleOnToggle'), secs = document.getElementById('idleSecsSelect');
+  if (on) on.addEventListener('change', () => { setSetting('idleOn', on.checked); setSelectDisabled(secs, !on.checked); lastActive = Date.now(); });
+  if (secs) secs.addEventListener('change', () => { setSetting('idleSecs', Math.max(30, Number(secs.value) || 120)); lastActive = Date.now(); });
 })();

@@ -268,6 +268,8 @@ function createSync({ userDataDir, io, now = () => Date.now(), log = console, fi
       try {
         const rs = isObj(remote.doc.sections[id]) ? remote.doc.sections[id] : null;
         const d = diffPart(id, payloadOf(id, src), rs ? cleanRemote(id, rs.data) : null);
+        const sec = transfer.SECTIONS.find(x => x.id === id);
+        if (sec) { d.about = sec.about; d.noun = sec.noun; } // what the part is, and what one item of it is called, for the explanation
         if (d.onlyHere.length || d.onlyFolder.length || d.changed || d.folderHasNone) parts.push(d); // parts that are identical aren't listed
       } catch { /* a part that can't be compared is left out */ }
     }

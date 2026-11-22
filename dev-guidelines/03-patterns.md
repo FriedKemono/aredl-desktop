@@ -40,7 +40,7 @@ m.body.appendChild(el('p', 'dim', 'text'));
 
 ## A command-palette entry
 
-Static actions are in `paletteActions()`, searchable content in `deepSearch()` (`add(kind, label, text, run, base, key, ctx)`). `label` is the short name ("Packs"), `ctx` says what happens and where ("Opens the Packs tab"). Every place the app can send you gets an entry that reads as an action.
+Static actions are in `paletteActions()`, searchable content in `deepSearch()` (`add(kind, label, text, run, base, key, ctx)`). Content that comes from a page's data must also be loaded by `prepareSearch()` in `features.js` (quietly, once, a few seconds after start-up and when the palette opens), so it can be found without opening that page first. Results are shown twelve at a time; the rest appears as the person goes down the list. `label` is the short name ("Packs"), `ctx` says what happens and where ("Opens the Packs tab"). Every place the app can send you gets an entry that reads as an action.
 
 ## A tour step
 
@@ -56,6 +56,11 @@ Add to `STEPS` in `tour.js`. Fields: `id`, `tab`, `target` (selector, function, 
 
 `picKey(levelId, vid)` → key (`'a:<id>'`, a YouTube id, or `'custom'`); `picUrl(key, kind)` → URL (`kind` `'full'` or `'cards'`); `withPic(key, ok, fail)` loads it for canvas sampling; `bannerPicCss(...)` gives a banner background. Always fall back to YouTube when AREDL has no picture (`aredlMissing`).
 
-## The floating player
+## The corner player
 
-`VideoDock.popOut()` opens it (`main.js` `openMiniWindow`). `renderer/mini.html` reuses the corner player's markup and `styles.css`, so styling changes in `.video-dock.mini` apply to both. It is a transparent window with `MINI_PAD` around the player for the corner grips and shadow; moving and resizing are done by IPC (`mini:move`, `mini:resize`).
+The corner player is **always its own window** (`main.js` `openMiniWindow`, page `renderer/mini.html` + `mini.js`), never an element of the app's page, so it never changes from one kind of player into another. It reuses the old markup and `styles.css` (`.video-dock.mini`), so styling changes there apply to it. It is a transparent window with `MINI_PAD` (48 px) around the player for the corner grips and the shadow (the shadow in `mini.html` is sized to fit inside that room).
+
+- **In the app:** `VideoDock` (`app.js`) has modes `inline`, `off` and `float`. In `float` the dock is hidden and blank; its slot shows “Playing in the corner player”. `floatCtx` is the video that is in (or on its way to) the window.
+- **Hand-over without a gap:** `floatOut()` opens the window (`mini:open`) while the app's player keeps playing; the window loads the video muted, says `mini:primed` once it plays, the app answers `mini:go {time, playing}` and stops its own player; the window seeks and unmutes. `restore()` / `finishBack()` do the same in the other direction (the app loads muted, unmutes and calls `mini:close`).
+- **Coming back:** `requestBack()` asks the window (`mini:requestReturn`, quiet = do not open the page); the window answers with `mini:return`; the app gets `mini:returned`. “Back to the level” is the same without `quiet`, and also calls the level's `onReturn`.
+- **Moving and resizing** are done in `main.js` (`mini:gesture`, `mini:gestureEnd`): the page only says when the pointer went down and up; in between the main process reads the cursor every 8 ms and sets the window's bounds (always with the full size, so a screen with a different scale cannot change it). On release the player is kept on a screen and snaps to an edge within 26 px. Position (`sx`, `sy`) and width are saved in the `miniPlayer` setting; only the width is exported or synced.
