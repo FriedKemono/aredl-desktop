@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, safeStorage, nativeImage, shell, dialog, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, ipcMain, safeStorage, nativeImage, shell, dialog, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -389,7 +389,7 @@ function startLocalServer() {
       if (!filePath.startsWith(rendererDir)) { res.writeHead(403); res.end(); return; }
       fs.readFile(filePath, (err, data) => {
         if (err) { res.writeHead(404); res.end('Not found'); return; }
-        res.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
+        res.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream', 'Referrer-Policy': 'strict-origin-when-cross-origin' }); // (what YouTube's player asks pages to use)
         res.end(data);
       });
     });
@@ -498,6 +498,7 @@ function createWindow() {
   });
   // a video that is playing carries on in the floating player while the app is minimised or tucked away, and comes back when the app does
   const tell = (name) => { if (!app.isQuiting && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(name); };
+  pwFollowMainWindow(mainWindow);
   mainWindow.on('minimize', () => tell('win:away'));
   mainWindow.on('hide', () => tell('win:away'));
   mainWindow.on('restore', () => tell('win:back'));
@@ -1343,6 +1344,15 @@ app.whenReady().then(async () => {
   if (syncer.status().enabled) await Promise.race([safeSync('full'), new Promise(r => setTimeout(r, 7000))]); // pull what the other computer changed BEFORE the window reads any data (but never wait long for the network)
   startSyncTimer();
   await startLocalServer();
+  // YouTube's embedded player refuses to play ("Error 153", a player configuration error) when the request doesn't say which page it is embedded
+  // in (the HTTP Referer header). Pages that send it get the video; so the app's own address is added whenever a request for an embed lacks it.
+  try {
+    session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['https://www.youtube.com/embed/*', 'https://www.youtube-nocookie.com/embed/*'] }, (details, cb) => {
+      const h = details.requestHeaders;
+      if (!Object.keys(h).some(k => k.toLowerCase() === 'referer')) h.Referer = `http://127.0.0.1:${localServerPort}/`;
+      cb({ requestHeaders: h });
+    });
+  } catch { /* the embed just goes without it */ }
   createWindow();
   if (process.platform !== 'darwin') createTray(); // on a Mac the Dock icon does that job: closing the window keeps the app running, clicking the Dock icon brings it back
   setupAutoUpdate();
@@ -1369,64 +1379,100 @@ app.on('window-all-closed', () => {
 
 
 // ---------------------------------------------------------------------------
-// The corner player. It is always a window of its own (never part of the app's page), so it never has to change from one kind
-// of player into another while it is being moved:
-//   - it stays on top of everything (other apps too), can be put anywhere on any screen, and has no button in the taskbar
-//   - the app hands a playing video over to it without a gap: the window loads the video muted next to the one in the app, and once
-//     it plays the app tells it the exact moment ("mini:go"), it seeks there and unmutes, and the app's own player stops
-//   - moving and resizing are done here: the cursor is read every few milliseconds and the window follows it, so there is no
-//     message to the page between the pointer and the window to make it lag
+// The video players. Every video the app shows is played by a window of its own (renderer/mini.html), so it is always YouTube's own player
+// and nothing is ever handed over, reloaded or muted and unmuted (so there is no delay and no cut in the sound):
+//   - On its page a player is "docked": its window is laid exactly over the page's video, can't be moved, has no controls of its own (it is
+//     YouTube's own player, with YouTube's own thumbnail and play button), follows the page when it scrolls and the app when it moves, and
+//     belongs to the app's window (so it never covers other apps). When something of the app has to be above the video (a menu, the command
+//     palette...) the app says so and the window steps aside (or, for the pack window, only dims) while the page shows the picture under it.
+//   - When the page of a playing video goes away (another tab or level, the app minimised) its window is "popped out": it glides to the corner,
+//     goes on top of everything (other apps too), and can be moved and resized there.
+//   - Moving and resizing are done here: the cursor is read every few milliseconds and the window follows it, so there is no message to the
+//     page between the pointer and the window to make it lag.
 // ---------------------------------------------------------------------------
-let miniWin = null, miniInit = null, miniWidth = 0, miniGesture = null;
-const MINI_PAD = 48;             // room around the player inside its window: the corner grips and the shadow are drawn there (it is see-through)
-const MINI_MIN = 220, MINI_MAX = 900; // the same limits the corner player always had
+const players = new Map();   // id → { id, win, mode, rect, covered, dim, vis, owned, ready, key, lkey, load, gliding, glideEnd }
+let miniWidth = 0, miniGesture = null;
+const MINI_PAD = 48;             // room around the player inside its window in the corner: the grips and the shadow are drawn there (it is see-through)
+const MINI_MIN = 220, MINI_MAX = 900;
 const clampNum = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
 const miniHeight = (w) => Math.round(w * 9 / 16);
 function stopMiniGesture() { if (miniGesture) { clearInterval(miniGesture.timer); miniGesture = null; } }
-// The corner player glides between its page's video and its corner: the window's bounds are moved a little every few milliseconds
-// (from/to are the player's own rectangle on the screen; the room around it for grips and shadow is added here).
-let miniAnim = null, miniPlan = null, miniShown = false, miniGliding = false, miniGlideEnd = null;
-function stopMiniAnim() { if (miniAnim) { clearInterval(miniAnim.timer); miniAnim = null; } miniGlideEnd = null; miniGliding = false; }
 const unionRect = (a, b) => { const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y); return { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y }; };
-// The player glides between two places on the screen without the window being resized on every frame (which is what makes it stutter):
+function miniBoundsOf(r) { return { x: Math.round(r.x - MINI_PAD), y: Math.round(r.y - MINI_PAD), width: Math.round(r.w + MINI_PAD * 2), height: Math.round(r.h + MINI_PAD * 2) }; }
+// The corner player (popping out, gliding, the masked swap) exists only while Settings › Videos › “Move it to a corner player” is chosen.
+const cornerOn = () => (loadSettings().videoOnLeave || 'popup') === 'popup';
+const pAlive = (P) => !!P && !!P.win && !P.win.isDestroyed();
+const pSend = (P, ch, d) => { if (pAlive(P)) P.win.webContents.send(ch, d); };
+const toApp = (channel, data) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data); };
+const playerOf = (e) => { for (const P of players.values()) if (pAlive(P) && e.sender === P.win.webContents) return P; return null; };
+const fromApp = (e) => !!mainWindow && !mainWindow.isDestroyed() && e.sender === mainWindow.webContents;
+const cornerPlayer = () => { for (const P of players.values()) if (P.mode === 'corner') return P; return null; };
+
+// The window is always "on screen" (a page of a window that was never shown counts as hidden, and YouTube then often won't play in it):
+// out of sight it is fully see-through and click-through. `vis` is how opaque it is (0 to 1).
+function pSetVis(P, vis) {
+  if (!pAlive(P)) return;
+  if (P.swapping && vis > 0) return; // see pSwapBegin: it is revealed when the page says its new layout is on screen
+  if (vis !== P.vis) { P.vis = vis; P.win.setOpacity(vis); P.win.setIgnoreMouseEvents(vis < 1); }
+  if (!P.win.isVisible()) P.win.showInactive();
+}
+// Docked, the window belongs to the app's window (it stays above it but under other apps, and goes with it); popped out, it belongs to nobody.
+function pOwn(P, on) {
+  if (!pAlive(P) || on === P.owned) return;
+  if (on && mainWindow && !mainWindow.isDestroyed()) {
+    P.owned = true;
+    P.win.setAlwaysOnTop(false);
+    if (process.platform === 'darwin') P.win.setVisibleOnAllWorkspaces(false);
+    P.win.setParentWindow(mainWindow);
+  } else {
+    P.owned = false;
+    P.win.setParentWindow(null);
+    P.win.setAlwaysOnTop(true, 'screen-saver'); // above full-screen windows and other apps
+    if (process.platform === 'darwin') P.win.setVisibleOnAllWorkspaces(true);
+  }
+}
+// The window and its page are different processes: when a window is moved or resized, the OS shows it at once but the page draws its new layout a
+// frame or two later, so for that moment the old layout shows in the new window, displaced by however far the window's origin moved. That is the
+// short jump at the start and end of a glide. So during that swap only (never while scrolling) the window is see-through, and it is shown again
+// when the page reports (mini:placed) that the new layout has been drawn.
+function pSwapBegin(P) { if (!pAlive(P)) return; clearTimeout(P.swapTimer); P.swapping = false; pSetVis(P, 0); P.swapping = true; }
+function pSwapEnd(P) {
+  if (!P) return;
+  clearTimeout(P.swapTimer); P.onAck = null;
+  if (!P.swapping) return;
+  P.swapping = false;
+  if (!pAlive(P)) return;
+  if (P.mode === 'corner') pSetVis(P, 1); else if (P.mode === 'docked') pSetVis(P, P.covered ? 0 : (P.dim ? 0.5 : 1));
+}
+function pAwaitPlaced(P, fn) { // fn runs when the page says its layout is drawn (or after a short wait, so it can never stay hidden)
+  clearTimeout(P.swapTimer);
+  const run = () => { if (P.onAck !== run) return; P.onAck = null; clearTimeout(P.swapTimer); fn(); };
+  P.onAck = run;
+  P.swapTimer = setTimeout(run, 250);
+}
+// A player glides between two places on the screen without its window being resized on every frame (which is what makes it stutter):
 // the window is made big enough to cover both places, the page moves the player inside it with a transform (done by the graphics card,
-// so it is smooth), and when it has arrived the window is put on its final place.
-function miniGlide(win, from, to, ms, { show = false } = {}, done) {
-  stopMiniAnim();
-  miniGliding = true;
+// so it is smooth), and when it has arrived the window is put on its final place by `done`.
+function pGlide(P, from, to, ms, done, opt = {}) {
+  const win = P.win;
+  P.gliding = true;
   const u = unionRect(from, to), ox = u.x - MINI_PAD, oy = u.y - MINI_PAD;
   const rel = (r) => ({ x: r.x - ox, y: r.y - oy, w: r.w, h: r.h });
-  const finish = () => { if (miniGlideEnd !== finish) return; miniGlideEnd = null; miniGliding = false; if (!win.isDestroyed()) done(); };
-  miniGlideEnd = finish;
-  win.setBounds(miniBoundsOf(u));
-  win.webContents.send('mini:glide', { from: rel(from), to: rel(to), ms });
-  setTimeout(() => {
-    if (miniGlideEnd !== finish || win.isDestroyed()) return;
-    if (show) { win.showInactive(); win.setAlwaysOnTop(true, 'screen-saver'); }
+  const finish = () => { if (P.glideEnd !== finish) return; P.glideEnd = null; P.gliding = false; if (!win.isDestroyed()) done(); };
+  P.glideEnd = finish;
+  const nb = miniBoundsOf(u);
+  // The player is told first how to sit in the bigger window (ww/wh: the size it is about to get). fromClip/toClip: the part of the video that is
+  // scrolled out of view at either end, so a partly visible video glides as the whole video with that part revealed or covered.
+  pSwapBegin(P);
+  win.webContents.send('mini:glide', { from: rel(from), to: rel(to), ms, ww: nb.width, wh: nb.height, fromClip: opt.fromClip || null, toClip: opt.toClip || null, toDocked: !!opt.toDocked, ack: true });
+  win.setBounds(nb);
+  pAwaitPlaced(P, () => {
+    if (P.glideEnd !== finish || win.isDestroyed()) return;
+    pSwapEnd(P); // (the swap is over: it is visible at the start of the glide, exactly where the video was)
     win.webContents.send('mini:glideGo');
     setTimeout(finish, ms + 700); // never stay stuck
-  }, show ? 40 : 20);
+  });
 }
-// the window appears (once the video in it plays), and glides from where the video was to its corner
-function showMini() {
-  const win = miniWin;
-  if (!win || win.isDestroyed() || miniShown) return;
-  miniShown = true;
-  const plan = miniPlan; miniPlan = null;
-  if (!plan) { win.showInactive(); win.setAlwaysOnTop(true, 'screen-saver'); return; }
-  miniGlide(win, plan.from, plan.to, 300, { show: true }, () => { win.setBounds(miniBoundsOf(plan.to)); win.webContents.send('mini:settle'); });
-}
-function miniBoundsOf(r) { return { x: Math.round(r.x - MINI_PAD), y: Math.round(r.y - MINI_PAD), width: Math.round(r.w + MINI_PAD * 2), height: Math.round(r.h + MINI_PAD * 2) }; }
-// a rectangle of the app's page (CSS pixels) as a rectangle on the screen, or null when it can't be placed (app hidden or minimised, odd values)
-function miniRectOf(r) {
-  const mw = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-  if (!mw || !mw.isVisible() || mw.isMinimized() || !r || typeof r !== 'object') return null;
-  const v = [r.left, r.top, r.width, r.height].map(Number);
-  if (!v.every(Number.isFinite) || v[2] < 40 || v[3] < 20 || v[2] > 4000 || v[3] > 4000) return null;
-  const cb = mw.getContentBounds(), z = mw.webContents.getZoomFactor() || 1;
-  return { x: Math.round(cb.x + v[0] * z), y: Math.round(cb.y + v[1] * z), w: Math.round(v[2] * z), h: Math.round(v[3] * z) };
-}
-function closeMiniWindow() { stopMiniGesture(); stopMiniAnim(); miniPlan = null; const w = miniWin; miniWin = null; if (w && !w.isDestroyed()) w.destroy(); } // miniWin is cleared first so its 'closed' event isn't taken for the person closing it
 const miniPrefs = () => { const v = loadSettings().miniPlayer; return v && typeof v === 'object' ? v : {}; };
 // width travels with the settings; the position (sx, sy: where the player's top-left corner is on the screen) stays on this computer
 const saveMiniPrefs = (patch) => { try { saveSettings({ miniPlayer: { x: null, y: null, ...miniPrefs(), ...patch } }); } catch { /* not saved this time */ } };
@@ -1453,90 +1499,231 @@ function miniPlace() {
   else if (mw) { const wa = screen.getDisplayMatching(mw.getBounds()).workArea; pt = { x: wa.x + wa.width - w - 16, y: wa.y + wa.height - h - 16 }; }
   return { w, h, at: miniFit(pt.x, pt.y, w, h, false) };
 }
+const pwCornerRect = () => { const { w, h, at } = miniPlace(); return { x: at.x, y: at.y, w, h }; };
 const validVid = (v) => typeof v === 'string' && /^[\w-]{6,20}$/.test(v);
-const miniInitOf = (o, w, extra) => ({
-  vid: o.vid, time: Number(o.time) || 0, playing: !!o.playing, handover: o.handover === true, title: String(o.title || '').slice(0, 300), pad: MINI_PAD, width: w,
-  rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000), ...extra,
-});
-function makeMiniWindow(at, w, h) {
+const validMedalPart = (v) => typeof v === 'string' && /^[A-Za-z0-9_-]{3,60}$/.test(v);
+
+// where the visible part of a docked video is on the screen (and how the player sits inside that part, for a video partly scrolled out of view).
+// Everything is rounded once, to whole pixels, from the video's own corner: the window and the video inside it then always agree, so the video
+// doesn't shift by a pixel from one frame to the next while the page scrolls.
+function pDockedGeometry(P) {
+  const mw = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  if (!mw || !mw.isVisible() || mw.isMinimized() || !P.rect) return null;
+  const r = P.rect, c = r.clip, cb = mw.getContentBounds(), z = mw.webContents.getZoomFactor() || 1;
+  const cx = Math.round(cb.x + r.left * z), cy = Math.round(cb.y + r.top * z);
+  const cw = Math.round(r.width * z), ch = Math.round(r.height * z);
+  const x0 = Math.max(cx, Math.round(cb.x + (r.left + c.left) * z)), y0 = Math.max(cy, Math.round(cb.y + (r.top + c.top) * z));
+  const x1 = Math.min(cx + cw, Math.round(cb.x + (r.left + r.width - c.right) * z)), y1 = Math.min(cy + ch, Math.round(cb.y + (r.top + r.height - c.bottom) * z));
+  if (x1 - x0 < 8 || y1 - y0 < 8) return null;
+  return { vis: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, ox: x0 - cx, oy: y0 - cy, w: cw, h: ch };
+}
+// the whole video (also the part out of view) and how much of it is out of view on each side, for gliding
+const pContentRect = (g) => ({ x: g.vis.x - g.ox, y: g.vis.y - g.oy, w: g.w, h: g.h });
+function pClipOf(g) {
+  const c = { t: g.oy, l: g.ox, r: Math.max(0, g.w - g.ox - g.vis.w), b: Math.max(0, g.h - g.oy - g.vis.h) };
+  return c.t > 0 || c.l > 0 || c.r > 0 || c.b > 0 ? c : null;
+}
+function pApplyDocked(P) {
+  if (!pAlive(P) || P.mode !== 'docked' || P.gliding || P.fs) return;
+  const g = pDockedGeometry(P);
+  if (!g || P.covered) { pSetVis(P, 0); P.key = ''; P.lkey = ''; return; }
+  const bKey = `${g.vis.x},${g.vis.y},${g.vis.w},${g.vis.h}`;
+  const lKey = `${g.ox},${g.oy},${g.w},${g.h}`;
+  pOwn(P, true);
+  // Scrolling mostly only moves the window (or changes the part of it in view at the bottom or right), and then the player isn't told anything.
+  // When how the video sits inside the window changes too, the player is told before the window changes size and applies it in that same frame.
+  if (lKey !== P.lkey) {
+    const b = P.win.getBounds();
+    const resizing = b.width !== g.vis.w || b.height !== g.vis.h;
+    P.lkey = lKey;
+    pSend(P, 'mini:place', { mode: 'docked', ox: g.ox, oy: g.oy, w: g.w, h: g.h, ww: resizing ? g.vis.w : 0, wh: resizing ? g.vis.h : 0, ack: !!P.swapping });
+  }
+  if (bKey !== P.key) {
+    P.key = bKey;
+    P.win.setBounds({ x: g.vis.x, y: g.vis.y, width: g.vis.w, height: g.vis.h });
+  }
+  pSetVis(P, P.dim ? 0.5 : 1);
+}
+function pToDocked(P) { // over the page's video: straight there, or gliding in from the corner
+  const was = P.mode;
+  P.mode = 'docked'; P.key = ''; P.lkey = '';
+  const g = pDockedGeometry(P);
+  if (!g || P.covered) { pSetVis(P, 0); return; }
+  if (was === 'corner' && P.vis > 0 && cornerOn()) { // (with the setting off there is no glide or masked swap: the video is simply put over its page)
+    const b = P.win.getBounds();
+    stopMiniGesture();
+    pGlide(P, { x: b.x + MINI_PAD, y: b.y + MINI_PAD, w: b.width - MINI_PAD * 2, h: b.height - MINI_PAD * 2 }, pContentRect(g), 260, () => { P.key = ''; P.lkey = ''; pSwapBegin(P); pApplyDocked(P); pAwaitPlaced(P, () => pSwapEnd(P)); }, { toClip: pClipOf(g), toDocked: true });
+  } else pApplyDocked(P);
+}
+function pToCorner(P, instant) { // popped out: glides from the page's video to the corner (or just appears there, e.g. when the app is minimised)
+  if (!pAlive(P)) return;
+  // one popped-out player at a time
+  for (const o of [...players.values()]) if (o !== P && o.mode === 'corner') pDestroy(o, true);
+  const to = pwCornerRect();
+  const mw = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const away = !mw || mw.isMinimized() || !mw.isVisible();
+  let from = null, fromClip = null;
+  if (P.mode === 'docked' && P.vis > 0 && !instant && !away) {
+    const g = pDockedGeometry(P);
+    if (g) { from = pContentRect(g); fromClip = pClipOf(g); } // the whole video, with the part out of view covered, so it doesn't glide as a squashed piece
+    else { const b = P.win.getBounds(); if (b.width > 40) from = { x: b.x, y: b.y, w: b.width, h: b.height }; }
+  }
+  pSwapEnd(P); P.mode = 'corner'; P.key = ''; P.lkey = ''; P.glideEnd = null; P.gliding = false; P.dim = false; P.covered = false;
+  pOwn(P, false);
+  pSetVis(P, 1);
+  P.win.showInactive();
+  const settle = (swap) => { // the player is told first and applies it in the frame the window gets its final size
+    const nb = miniBoundsOf(to);
+    if (swap) pSwapBegin(P);
+    pSend(P, 'mini:place', { mode: 'corner', ww: nb.width, wh: nb.height, ack: !!swap });
+    P.win.setBounds(nb);
+    if (swap) pAwaitPlaced(P, () => pSwapEnd(P));
+  };
+  if (from) pGlide(P, from, to, 300, () => settle(true), { fromClip, toDocked: false });
+  else settle(false);
+}
+function pHide(P) {
+  if (!pAlive(P)) return;
+  P.mode = 'hidden'; P.key = ''; P.lkey = '';
+  pSetVis(P, 0);
+}
+function pDestroy(P, quiet) { // the window goes; it is taken out of the list first so its 'closed' event isn't taken for the person closing it
+  if (!P) return;
+  players.delete(P.id);
+  if (miniGesture && miniGesture.P === P) stopMiniGesture();
+  P.glideEnd = null; P.gliding = false; clearTimeout(P.swapTimer); P.onAck = null;
+  const w = P.win; P.win = null;
+  if (w && !w.isDestroyed()) w.destroy();
+  if (quiet) return;
+}
+// Full screen for a player window (YouTube's full-screen button). The window is only as big as the video and can't be made a full-screen window of
+// the system (it is see-through, has no frame and belongs to the app), so it is made as big as the screen it is on and put on top of everything;
+// the page's full-screen player then fills it. When full screen ends, the window goes back to where it was.
+function pFullscreen(P, on) {
+  if (!pAlive(P)) return;
+  if (on) {
+    if (P.fs) return;
+    const b = P.win.getBounds();
+    P.fs = { bounds: b, mode: P.mode };
+    stopMiniGesture();
+    pOwn(P, false); // (not the app's own window any more: it covers the whole screen, other apps included)
+    P.vis = -1; pSetVis(P, 1); // visible and clickable
+    P.win.setBounds(screen.getDisplayMatching(b).bounds);
+    P.win.setAlwaysOnTop(true, 'screen-saver');
+    P.win.focus();
+  } else {
+    const f = P.fs;
+    if (!f) return;
+    P.fs = null;
+    P.win.setBounds(f.bounds);
+    P.key = ''; P.lkey = '';
+    if (P.mode === 'docked') { P.vis = -1; pApplyDocked(P); }
+    else if (P.mode === 'corner') pSend(P, 'mini:place', { mode: 'corner', ww: f.bounds.width, wh: f.bounds.height });
+  }
+}
+function pCreate(id) {
+  const { w, h, at } = miniPlace();
   const win = new BrowserWindow({
     width: w + MINI_PAD * 2, height: h + MINI_PAD * 2, x: at.x - MINI_PAD, y: at.y - MINI_PAD, show: false, transparent: true, backgroundColor: '#00000000',
     frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, hasShadow: false,
-    skipTaskbar: true, alwaysOnTop: true, title: 'AREDL Desktop',
+    skipTaskbar: true, alwaysOnTop: true, title: 'AREDL Desktop', focusable: true,
     webPreferences: { preload: path.join(__dirname, 'mini-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false },
   });
-  win.setAlwaysOnTop(true, 'screen-saver'); // above full-screen windows and other apps
+  const P = { id, win, mode: 'hidden', rect: null, covered: false, dim: false, vis: 1, owned: false, ready: false, key: '', lkey: '', load: null, gliding: false, glideEnd: null };
+  players.set(id, P);
   win.setSkipTaskbar(true);
-  if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true); // on every desktop (without hiding the Dock icon)
   win.setMenuBarVisibility(false);
+  win.setOpacity(0); win.setIgnoreMouseEvents(true); P.vis = 0; win.showInactive(); // on screen but see-through, so the page counts as visible and the video plays
+  win.setAlwaysOnTop(true, 'screen-saver');
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.on('closed', () => {
-    if (miniWarm && miniWarm.win === win) { clearTimeout(miniWarm.timer); miniWarm = null; }
-    if (miniWin === win) { stopMiniGesture(); miniWin = null; if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('mini:closed'); }
+  win.webContents.on('enter-html-full-screen', () => pFullscreen(P, true));
+  win.webContents.on('leave-html-full-screen', () => pFullscreen(P, false));
+  // scrolling the wheel over a docked video scrolls the page under it (with the same kind of scroll: notched wheel or trackpad, and its speed)
+  const num = (v, d = 0) => (Number.isFinite(v) ? v : d);
+  win.webContents.on('input-event', (_e, input) => {
+    try {
+      if (input.type !== 'mouseWheel' || P.mode !== 'docked' || P.fs || !mainWindow || mainWindow.isDestroyed()) return;
+      const b = win.getBounds(), cb = mainWindow.getContentBounds(), z = mainWindow.webContents.getZoomFactor() || 1;
+      mainWindow.webContents.sendInputEvent({ type: 'mouseWheel', x: Math.round((b.x + input.x - cb.x) / z), y: Math.round((b.y + input.y - cb.y) / z), deltaX: input.deltaX || 0, deltaY: input.deltaY || 0, wheelTicksX: num(input.wheelTicksX), wheelTicksY: num(input.wheelTicksY), accelerationRatioX: num(input.accelerationRatioX, 1), accelerationRatioY: num(input.accelerationRatioY, 1), hasPreciseScrollingDeltas: input.hasPreciseScrollingDeltas === true, canScroll: true });
+    } catch { /* the page just doesn't scroll */ }
   });
+  win.on('closed', () => { if (players.get(id) === P) { players.delete(id); if (miniGesture && miniGesture.P === P) stopMiniGesture(); P.win = null; toApp('player:closed', { id }); } });
   win.loadURL(`http://127.0.0.1:${localServerPort}/mini.html`);
-  return win;
+  return P;
 }
-// A hidden corner player kept ready for the video that is playing in the app (its page and its YouTube player are already loaded, paused),
-// so that handing the video over only has to seek and play instead of starting a window and a player from nothing.
-let miniWarm = null; // { win, vid, ready, init, timer }
-function dropWarm() { const w = miniWarm; miniWarm = null; if (w) { clearTimeout(w.timer); if (!w.win.isDestroyed()) w.win.destroy(); } }
-function warmMini(o) {
-  if (!o || !validVid(o.vid) || miniWin) { if (!miniWin) dropWarm(); return false; }
-  if (miniWarm && miniWarm.vid === o.vid && !miniWarm.win.isDestroyed()) { clearTimeout(miniWarm.timer); miniWarm.timer = setTimeout(dropWarm, 15 * 60 * 1000); return true; }
-  dropWarm();
-  const { w, h, at } = miniPlace();
-  const win = makeMiniWindow(at, w, h);
-  miniWarm = { win, vid: o.vid, ready: false, init: miniInitOf(o, w, { warm: true, playing: false, handover: false, time: Number(o.time) || 0 }), timer: setTimeout(dropWarm, 15 * 60 * 1000) };
+
+// the app: load a video (its window is made if it hasn't one yet), place the window, pop out, send a command to YouTube, close
+ipcMain.handle('player:load', async (e, o) => {
+  if (!fromApp(e) || !o || !Number.isInteger(o.id)) return false;
+  // a Medal clip or a Twitch video (played through their own embed addresses) instead of a YouTube video
+  const kind = o.kind === 'medal' ? 'medal' : o.kind === 'twitch' ? 'twitch' : 'youtube';
+  const tclip = kind === 'twitch' && o.tkind === 'clip';
+  const ttime = typeof o.ttime === 'string' && /^[\dhms]{1,20}$/.test(o.ttime) ? o.ttime : '';
+  const ap = o.autoplay === true;
+  if (kind === 'medal' ? !(validMedalPart(o.mid) && (!o.mhash || validMedalPart(o.mhash)))
+    : kind === 'twitch' ? !(typeof o.tid === 'string' && (tclip ? /^[\w-]{3,100}$/ : /^\d{3,15}$/).test(o.tid))
+    : !validVid(o.vid)) return false;
+  // Twitch only plays inside a page that names itself in `parent`: the player windows are served from 127.0.0.1, which Twitch accepts for that
+  const url = kind === 'medal' ? `https://medal.tv/clip/${o.mid}${o.mhash ? '/' + o.mhash : ''}`
+    : kind === 'twitch' ? (tclip ? `https://clips.twitch.tv/embed?clip=${o.tid}&parent=127.0.0.1&autoplay=${ap}&muted=false`
+      : `https://player.twitch.tv/?video=v${o.tid}&parent=127.0.0.1&autoplay=${ap}&muted=false${ttime ? '&time=' + ttime : ''}`)
+    : '';
+  const load = {
+    kind, standalone: o.standalone === true, url,
+    vid: kind === 'medal' ? o.mid : kind === 'twitch' ? o.tid : o.vid, time: Math.max(0, Number(o.time) || 0), autoplay: o.autoplay === true, title: String(o.title || '').slice(0, 300), pad: MINI_PAD,
+    rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000),
+  };
+  let P = players.get(o.id);
+  if (!pAlive(P)) P = pCreate(o.id);
+  P.load = load;
+  if (P.ready) pSend(P, 'mini:init', { ...load, id: P.id });
   return true;
-}
-ipcMain.handle('mini:warm', async (_e, o) => warmMini(o));
-function openMiniWindow(o) {
-  closeMiniWindow();
-  if (!o || !validVid(o.vid)) return false;
-  const { w, h, at } = miniPlace();
-  const fromRect = o.auto === true ? null : miniRectOf(o.from); // where the video was on the page: the window starts there and glides to the corner
-  miniPlan = fromRect ? { from: fromRect, to: { x: at.x, y: at.y, w, h } } : null;
-  miniShown = false;
-  miniInit = miniInitOf(o, w);
-  if (miniWarm && miniWarm.ready && miniWarm.vid === o.vid && !miniWarm.win.isDestroyed()) { // the ready one takes the video over
-    const win = miniWarm.win; clearTimeout(miniWarm.timer); miniWarm = null;
-    miniWin = win;
-    win.setBounds({ x: at.x - MINI_PAD, y: at.y - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
-    win.webContents.send('mini:init', { ...miniInit, promote: true });
-    return true;
-  }
-  dropWarm();
-  miniWin = makeMiniWindow(at, w, h);
-  return true;
-}
-const fromMini = (e) => !!miniWin && !miniWin.isDestroyed() && e.sender === miniWin.webContents;
-const toApp = (channel, data) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data); };
-ipcMain.handle('mini:open', async (_e, o) => openMiniWindow(o));
-ipcMain.on('mini:ready', (e) => { // the window's page has loaded: it gets what to show and appears without taking the keyboard from what you were doing
-  if (miniWarm && !miniWarm.win.isDestroyed() && e.sender === miniWarm.win.webContents) { miniWarm.ready = true; miniWarm.win.webContents.send('mini:init', miniWarm.init); return; }
-  if (fromMini(e) && miniInit) {
-    miniWin.webContents.send('mini:init', miniInit); // (the window stays hidden until its video plays, so there is never an empty window on screen)
+});
+ipcMain.on('player:place', (e, p) => {
+  const P = p && players.get(p.id);
+  if (!fromApp(e) || !pAlive(P) || P.fs) return; // (a player in full screen stays as it is)
+  if (p.mode === 'docked') {
+    const r = p.rect || {}, c = r.clip || {};
+    const v = [r.left, r.top, r.width, r.height, c.top, c.right, c.bottom, c.left].map(Number);
+    if (!v.every(Number.isFinite) || v[2] < 40 || v[3] < 20 || v[2] > 4000 || v[3] > 4000) return;
+    P.rect = { left: v[0], top: v[1], width: v[2], height: v[3], clip: { top: Math.max(0, v[4]), right: Math.max(0, v[5]), bottom: Math.max(0, v[6]), left: Math.max(0, v[7]) } };
+    P.covered = p.covered === true; P.dim = p.dim === true;
+    if (P.mode !== 'docked') pToDocked(P); else pApplyDocked(P);
+  } else if (p.mode === 'hidden') {
+    if (P.mode !== 'hidden') pHide(P);
   }
 });
-ipcMain.on('mini:glideDone', (e) => { if (fromMini(e) && miniGlideEnd) miniGlideEnd(); });
-ipcMain.on('mini:primed', (e) => {
-  if (!fromMini(e)) return;
-  const wait = miniPlan && !miniShown ? 90 : 0; // the app's player stays until the window is really on screen over it
-  showMini();
-  if (wait) setTimeout(() => toApp('mini:primed'), wait); else toApp('mini:primed');
-}); // its video plays (muted): the app can say which moment to carry on from
-ipcMain.on('mini:go', (_e, g) => { // the app's reply: the moment to carry on from; the window seeks there and unmutes
-  if (!miniWin || miniWin.isDestroyed() || !g || typeof g !== 'object') return;
-  miniWin.webContents.send('mini:go', { time: Math.max(0, Number(g.time) || 0), playing: g.playing === true });
+ipcMain.on('player:corner', (e, o) => { const P = o && players.get(o.id); if (fromApp(e) && pAlive(P) && !P.fs && P.mode !== 'corner' && (cornerOn() || o.force === true)) pToCorner(P, o.instant === true); });
+ipcMain.on('player:cmd', (e, c) => {
+  const P = c && players.get(c.id);
+  if (!fromApp(e) || !pAlive(P) || typeof c.func !== 'string' || c.func.length > 40) return;
+  pSend(P, 'mini:cmd', { func: c.func, args: c.args === undefined ? '' : c.args });
 });
-// Moving and resizing: the page says when the pointer went down on the bar or a grip and when it came up; in between the window follows the cursor.
+ipcMain.on('player:close', (e, id) => { if (fromApp(e)) pDestroy(players.get(id)); });
+
+// the windows
+ipcMain.on('mini:ready', (e) => { // its page has loaded: it gets the video to show
+  const P = playerOf(e);
+  if (!P) return;
+  P.ready = true;
+  if (P.load) pSend(P, 'mini:init', { ...P.load, id: P.id });
+  P.key = ''; P.lkey = '';
+  if (P.mode === 'docked') pApplyDocked(P); else if (P.mode === 'corner') pSend(P, 'mini:place', { mode: 'corner' });
+});
+ipcMain.on('mini:state', (e, st) => {
+  const P = playerOf(e);
+  if (P && st && typeof st === 'object') toApp('player:state', { id: P.id, state: typeof st.state === 'number' ? st.state : null, time: typeof st.time === 'number' ? st.time : null, error: typeof st.error === 'number' ? st.error : null });
+});
+ipcMain.on('mini:placed', (e) => { const P = playerOf(e); if (P && P.onAck) P.onAck(); });
+ipcMain.on('mini:glideDone', (e) => { const P = playerOf(e); if (P && P.glideEnd) P.glideEnd(); });
+// Moving and resizing (popped out only): the page says when the pointer went down on the bar or a grip and when it came up; in between the window follows the cursor.
 ipcMain.on('mini:gesture', (e, g) => {
-  if (!fromMini(e) || !g || (g.kind !== 'move' && g.kind !== 'resize')) return;
+  const P = playerOf(e);
+  if (!P || P.mode !== 'corner' || !g || (g.kind !== 'move' && g.kind !== 'resize')) return;
   stopMiniGesture();
-  if (miniGliding) return; // (a glide only lasts a moment)
-  const win = miniWin, c0 = screen.getCursorScreenPoint(), b0 = win.getBounds();
+  if (P.gliding) return; // (a glide only lasts a moment)
+  const win = P.win, c0 = screen.getCursorScreenPoint(), b0 = win.getBounds();
   const w0 = miniWidth, h0 = miniHeight(w0), left0 = b0.x + MINI_PAD, top0 = b0.y + MINI_PAD;
   let tick;
   if (g.kind === 'move') {
@@ -1568,51 +1755,40 @@ ipcMain.on('mini:gesture', (e, g) => {
       win.setBounds({ x: (sx < 0 ? left0 + w0 - w : left0) - MINI_PAD, y: (sy < 0 ? top0 + h0 - h : top0) - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
     };
   }
-  miniGesture = { kind: g.kind, timer: setInterval(() => { if (miniWin !== win || win.isDestroyed()) stopMiniGesture(); else tick(); }, 8) };
+  miniGesture = { kind: g.kind, P, timer: setInterval(() => { if (!pAlive(P)) stopMiniGesture(); else tick(); }, 8) };
 });
 ipcMain.on('mini:gestureEnd', (e) => {
-  if (!fromMini(e)) return;
+  const P = playerOf(e);
+  if (!P || P.mode !== 'corner') return;
   const kind = miniGesture && miniGesture.kind;
   stopMiniGesture();
-  const b = miniWin.getBounds(), w = miniWidth, h = miniHeight(w);
+  const b = P.win.getBounds(), w = miniWidth, h = miniHeight(w);
   const at = miniFit(b.x + MINI_PAD, b.y + MINI_PAD, w, h, kind === 'move'); // kept on a screen; sticks to an edge only if let go very close to it
-  if (at.x !== b.x + MINI_PAD || at.y !== b.y + MINI_PAD || b.width !== w + MINI_PAD * 2) miniWin.setBounds({ x: at.x - MINI_PAD, y: at.y - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
+  if (at.x !== b.x + MINI_PAD || at.y !== b.y + MINI_PAD || b.width !== w + MINI_PAD * 2) P.win.setBounds({ x: at.x - MINI_PAD, y: at.y - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
   saveMiniPrefs({ width: w, sx: at.x, sy: at.y });
 });
-ipcMain.on('mini:close-self', (e) => {
-  if (!fromMini(e)) return;
-  closeMiniWindow();
-  toApp('mini:closed');
-});
-// "Back to the level" (or the app asking for it). The window stays and keeps playing: the app starts its own player at the same moment
-// and closes this one ("mini:close") once that plays, so the video never stops in between.
-ipcMain.on('mini:return', (e, st) => {
-  if (!fromMini(e)) return;
-  const d = { vid: String((st && st.vid) || '').slice(0, 20), time: Math.max(0, Number(st && st.time) || 0), playing: !!(st && st.playing), quiet: !!(st && st.quiet) };
-  if (!d.quiet && mainWindow && !mainWindow.isDestroyed()) {
+ipcMain.on('mini:close-self', (e) => { const P = playerOf(e); if (!P) return; const id = P.id; pDestroy(P); toApp('player:closed', { id }); });
+// "Back to the level": the app opens the video's page, and the player docks over its video there
+ipcMain.on('mini:return', (e) => {
+  const P = playerOf(e);
+  if (!P) return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show(); mainWindow.focus();
   }
-  toApp('mini:returned', d);
+  toApp('player:return', { id: P.id });
 });
-// another video started in the app, or the app took the video back (then it says where its player is: the window glides there first)
-ipcMain.handle('mini:close', async (_e, o) => {
-  const win = miniWin, to = o && typeof o === 'object' ? miniRectOf(o.to) : null;
-  if (to && win && !win.isDestroyed() && win.isVisible()) {
-    stopMiniGesture();
-    const b = win.getBounds();
-    miniGlide(win, { x: b.x + MINI_PAD, y: b.y + MINI_PAD, w: b.width - MINI_PAD * 2, h: b.height - MINI_PAD * 2 }, to, 260, {}, () => { if (miniWin === win) closeMiniWindow(); });
-    return true;
-  }
-  closeMiniWindow();
-  return true;
-});
-ipcMain.handle('mini:requestReturn', async (_e, quiet) => { if (miniWin && !miniWin.isDestroyed()) miniWin.webContents.send('mini:requestReturn', quiet === true); return true; });
+// docked videos follow the app when it is moved, resized or brought back
+function pwFollowMainWindow(mw) {
+  ['move', 'resize', 'maximize', 'unmaximize', 'restore', 'show', 'enter-full-screen', 'leave-full-screen'].forEach(ev => mw.on(ev, () => { for (const P of players.values()) { P.key = ''; P.lkey = ''; pApplyDocked(P); } }));
+  mw.on('closed', () => pDestroyAll());
+}
+function pDestroyAll() { [...players.values()].forEach(P => pDestroy(P, true)); }
 
 let quitSynced = false;
 app.on('before-quit', (e) => {
   app.isQuiting = true;
-  closeMiniWindow();
+  pDestroyAll();
   stopPolling();
   if (macUpdater) macUpdater.onQuit(); // an update you chose "Later" for goes in as the app quits
   try {

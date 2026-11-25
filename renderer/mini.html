@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>AREDL Desktop</title>
 <link rel="stylesheet" href="styles.css">
 <style>
@@ -12,19 +13,25 @@
   /* the shadow fits in the room around the player, so it fades out before the edge of the window instead of being cut off */
   .video-dock.mini { box-shadow: 0 10px 30px rgba(0,0,0,.6), 0 0 0 1px color-mix(in srgb, var(--accent) 14%, transparent) !important; }
   .video-dock.mini:hover, .video-dock.mini.dragging { box-shadow: 0 12px 34px rgba(0,0,0,.64), 0 0 0 1px var(--accent-soft2), 0 0 24px var(--accent-soft) !important; }
-  /* while the video is being handed over from the app, its picture shows and the player appears the moment it plays */
   /* the picture is clipped by its own rounded box, so the video never reaches past the player's rounded corners */
   .video-dock.mini { background-clip: padding-box; }
   .video-dock.mini.gliding { transform: var(--glide) !important; transform-origin: 0 0; will-change: transform; }
-  .video-dock.mini.gliding.run { transform: none !important; transition: transform var(--glide-ms, 300ms) cubic-bezier(.22, .9, .25, 1) !important; }
+  .video-dock.mini.gliding.run { transform: none !important; transition: transform var(--glide-ms, 300ms) cubic-bezier(.22, .9, .25, 1), box-shadow var(--glide-ms, 300ms) ease !important; }
+  /* a video partly scrolled out of view glides whole, with the hidden part covered by a clip that opens or closes during the move */
+  .video-dock.mini.gliding.clip-glide { clip-path: var(--glide-clip-from); }
+  .video-dock.mini.gliding.clip-glide.run { clip-path: var(--glide-clip-to); transition: transform var(--glide-ms, 300ms) cubic-bezier(.22, .9, .25, 1), clip-path var(--glide-ms, 300ms) cubic-bezier(.22, .9, .25, 1), box-shadow var(--glide-ms, 300ms) ease !important; }
   .video-dock.mini .mp-clip { position: absolute; inset: 0; overflow: hidden; isolation: isolate; border-radius: calc(var(--radius) - 1px); clip-path: inset(0 round calc(var(--radius) - 1px)); transform: translateZ(0); }
-  .video-dock.mini iframe { transition: opacity .18s; border-radius: 0 !important; }
-  .video-dock.mini:not(.ready) iframe { opacity: 0; }
+  .video-dock.mini iframe { border-radius: 0 !important; }
+  /* docked over its page's video: only the video, no bar, grips, border or shadow, with the page's own corner radius */
+  .video-dock.mini.docked { box-shadow: none !important; border: 0 !important; border-radius: 10px; }
+  .video-dock.mini.docked .mp-clip { border-radius: 10px; clip-path: inset(0 round 10px); }
+  .video-dock.mini.docked .mp-bar, .video-dock.mini.docked .mp-resize { display: none !important; }
+  body.standalone .mp-btn[data-mp="return"] { display: none; }
 </style>
 </head>
 <body>
 <div class="video-dock mini">
-  <div class="mp-clip"><iframe title="Video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
+  <div class="mp-clip"><iframe title="Video player" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture" allowfullscreen></iframe></div>
   <div class="mp-bar">
     <span class="mp-grip" aria-hidden="true"></span>
     <span class="mp-title"></span>

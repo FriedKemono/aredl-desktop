@@ -7,11 +7,47 @@
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
   {
+    version: '1.1.9',
+    date: '23-11-2026',
+    title: 'Record video buttons and miniplayer',
+    items: [
+      ['new', 'Personal list entries have an Auto switch for Difficulty. On Auto, the difficulty follows the tier (rounded to the nearest whole number): Bizarre 21, Brutal 22, Extreme 23, Radical 24–25, Supreme 26–27, Ultimate 28, Horrendous 29–30, Inhumane 31–32, Slaughter 33–34, Apocalyptic 35–36, Divine 37–38, Silent 39 and up, and the AREDL #1 is an Infinite Demon. A tier or placement typed by hand is followed too. With Auto off the dropdown works as before. Entries that already have a difficulty keep it, with Auto off.', 'Auto difficulty'],
+      ['improved', 'In Records, the play button of a record is now the mark of the site its video is on, in white: YouTube, Medal or Twitch. The button grows slightly when the pointer is over it. Clicking it opens a menu: “Open in browser” or “Play in miniplayer”. The miniplayer opens in the corner with no level page behind it and plays the YouTube video, the Medal clip (through Medal’s own embed) or the Twitch video or clip (through Twitch’s own player) until it is closed. A video playing on a level’s page is paused when a record’s video starts.', 'Record video buttons'],
+    ],
+  },
+  {
+    version: '1.1.8',
+    date: '23-11-2026',
+    title: 'Videos inside the page unless the corner player is chosen, smoother scrolling and pop-out',
+    items: [
+      ['fixed', 'YouTube’s full-screen button did nothing in the player window. The window now covers the whole screen it is on while the video is full screen and goes back to its place afterwards. A video played inside the page keeps its place and layout untouched while it is full screen.', 'Full screen'],
+      ['improved', 'A separate player window is only used while “When a playing video isn’t on screen” is set to “Move it to a corner player”. With any other choice the video is played inside the page itself, so menus, the command palette, messages and other elements are drawn above it. The video carries on from the same moment when the setting is changed. Keep playing, Pause it and Stop it behave as before.', 'Video inside the page'],
+      ['fixed', 'Minimising the app or sending it to the tray moved a playing video to the corner player even when another choice was set. The corner player, its glide to and from the page and the see-through swap that goes with it are now only used while “Move it to a corner player” is chosen.', 'Corner player setting'],
+      ['improved', 'With the corner player chosen, a docked video follows the page more closely while it scrolls and stays visible the whole time. Its position is worked out in whole pixels from the video’s own corner, so the window and the video inside it no longer differ by a pixel from one frame to the next. The player is only told how the video sits in its window when that changes, and what is above the video is checked less often while the video is moving.', 'Video follows scrolling'],
+      ['improved', 'Scrolling with the pointer over a docked player window passes on the kind of scroll (notched wheel or trackpad) and its speed, so the page scrolls the same way as with the pointer elsewhere.', 'Wheel over video'],
+      ['fixed', 'At the start and end of the glide to or from the corner, the video showed for a moment slightly down and to the right of its place before moving to it. The player window is moved and resized by the system at once, while its page draws the new layout a frame or two later, so the old layout showed in the new window. The window is now see-through only during that swap and shown again as soon as the page reports that the new layout is drawn. Scrolling is not affected: the video stays visible and follows the page.', 'Pop-out and return jump'],
+      ['fixed', 'A video partly scrolled out of view was squashed while it glided to the corner or back. It now glides as the whole video, with the hidden part covered by a clip that opens or closes during the move. The corner player’s shadow fades in or out during the glide instead of appearing or disappearing at the end.', 'Partly visible video glide'],
+    ],
+  },
+  {
+    version: '1.1.7',
+    date: '22-11-2026',
+    title: 'Videos play in their own windows, docked over the page',
+    items: [
+      ['improved', 'Videos are played by player windows that sit exactly over the video on its page. It is YouTube’s own player, with YouTube’s own thumbnail and play button. The window cannot be moved while docked, follows the page when it scrolls and the app when it moves, and the mouse wheel over it scrolls the page. When you leave the page, open another level or minimise the app, the window of a playing video pops out: it glides to the corner, goes on top of everything and can be moved and resized there. Nothing is handed over or reloaded any more, so there is no delay and the sound no longer cuts.', 'Docked player windows'],
+      ['improved', 'When something of the app has to be above the video (a menu, the command palette, a message or the idle screen), the video steps aside and the video’s picture shows in its place until the other element is gone. A video playing behind the pack window only dims, and carries on where it is.', 'Menus above the video, packs'],
+      ['improved', 'The mouse pointer stays visible on the idle screen and is hidden after 3 seconds without moving, only while it is over the app.', 'Idle screen pointer'],
+      ['fixed', 'Many videos showed “Video unavailable” (YouTube’s Error 153). YouTube’s player now refuses to play when the request does not say which page it is embedded in (the HTTP Referer header). The app now sends it with every embed request that lacks it, its local pages ask for the referrer policy YouTube recommends, and a video that still gives 152 or 153 is tried once more through YouTube’s other embed address.', 'Video unavailable (Error 153)'],
+      ['improved', 'A video YouTube really will not play here (the uploader switched embedding off, or it is private or removed) now says so in place of the video, with YouTube’s error number and a link to watch it on YouTube.', 'Why a video can’t play'],
+      ['fixed', 'The popup after the idle screen no longer goes away when you click elsewhere. It stays for a while; while the mouse is over it, it stays until it is clicked or the mouse leaves it.', 'Idle screen popup'],
+    ],
+  },
+  {
     version: '1.1.6',
     date: '22-11-2026',
     title: 'Idle screen, smoother corner player, submission details and command palette scrolling',
     items: [
-      ['new', 'Idle screen: after a set time without use (30 seconds or more, set in Settings › Idle screen), random level thumbnails from YouTube fade in full screen one after another, each drifting slowly for about ten seconds. Any mouse movement, click, scroll or key press removes it at once and the app is exactly as it was. It can be turned off, and it does not start while a video is playing. The picture fills the whole screen, title bar included, with the level’s name and position along the top. When it ends, a pill at the bottom offers to open that level in the list. A Preview button in Settings shows it straight away.', 'Idle screen'],
+      ['new', 'Idle screen: after a set time without use (30 seconds or more, set in Settings › Idle screen), random level thumbnails from YouTube fade in full screen one after another, each drifting slowly for about ten seconds. Pressing any key or mouse button removes it at once and the app is exactly as it was; moving or scrolling the mouse does not. It can be turned off, and it does not start while a video is playing. The picture fills the whole screen, title bar included, with the level’s name and position along the top. When it ends, a pill at the bottom offers to open that level in the list (Ctrl+click adds it to the multi-select instead). A Preview button in Settings shows it straight away.', 'Idle screen'],
       ['improved', 'A video no longer moves to the corner player when its page is scrolled. It stays on its page, hidden while out of view and still playing, and shows again when scrolled back. Leaving the page by changing tab or level still hands the video to the corner player.', 'No pop-out on scroll'],
       ['improved', 'The corner player opens where the video was on the page and glides to its corner, and glides back to the video when the video returns to its page. Opening it also waits less for a page to finish redrawing.', 'Corner player animation'],
       ['fixed', 'In the corner player, the video reached slightly past the rounded corners. The picture is now clipped by the rounded shape of the player.', 'Corner player corners'],

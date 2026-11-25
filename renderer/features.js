@@ -1489,12 +1489,16 @@
     name.textContent = level.name || 'this level';
     msg.append('View ', name, ' in the list?');
     btn.className = 'btn'; btn.textContent = 'View';
-    btn.addEventListener('click', () => { hideOffer(); jumpToLevel(level.level_id, modeOfLevel(level)); });
+    btn.title = 'Ctrl+click adds it to multi-select instead';
+    btn.addEventListener('click', (ev) => { hideOffer(); if (ev.ctrlKey || ev.metaKey) addToLevelRange(level.level_id); else jumpToLevel(level.level_id, modeOfLevel(level)); });
     offer.append(msg, btn);
     offer.hidden = false;
-    clearTimeout(offerTimer); offerTimer = setTimeout(hideOffer, 9000);
+    clearTimeout(offerTimer);
+    offerTimer = setTimeout(() => { if (!offer.matches(':hover')) hideOffer(); }, 9000);
   }
-  document.addEventListener('mousedown', (e) => { if (!offer.hidden && !e.target.closest('.idle-offer')) hideOffer(); }, true);
+  // it stays for a while; while the mouse is over it, it stays until it is clicked or the mouse leaves it (clicking elsewhere does nothing to it)
+  offer.addEventListener('mouseenter', () => clearTimeout(offerTimer));
+  offer.addEventListener('mouseleave', () => { clearTimeout(offerTimer); offerTimer = setTimeout(hideOffer, 2500); });
   let lastActive = Date.now(), running = false, starting = false, swallowUntil = 0, runId = 0, lastX = null, lastY = null, front = 0;
   const recent = [];            // the last few levels shown, so the same one doesn't come back at once
 
@@ -1506,6 +1510,7 @@
     if (!running) return;
     const seen = levelOf[front];
     running = false; runId++;
+    clearTimeout(cursorTimer); el.classList.remove('hide-cursor');
     el.classList.remove('on'); el.hidden = true; // straight away, no fade out
     layers.forEach(l => { l.classList.remove('show'); l.style.backgroundImage = ''; });
     caps.forEach(c => c.classList.remove('show'));
@@ -1514,14 +1519,22 @@
   }
   const activity = (e) => {
     if (Date.now() < graceUntil) return;
-    if (!running && !starting && !offer.hidden && e && ['keydown', 'wheel'].includes(e.type)) hideOffer();
+    const press = !!e && ['mousedown', 'pointerdown', 'keydown', 'touchstart'].includes(e.type);
+    if (running && !press) {
+      if (e && (e.type === 'wheel' || e.type === 'touchmove')) e.preventDefault();
+      if (e && e.type === 'mousemove') { // the mouse stays visible, and goes away after 3 seconds without moving
+        const moved = lastX == null || Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY) >= 1;
+        lastX = e.clientX; lastY = e.clientY; pointerIn = true;
+        if (moved) wakeCursor();
+      }
+      return;
+    } // only pressing a button ends it: moving or scrolling doesn't
     if (e && e.type === 'mousemove') { // a mouse that merely sits still can still report a move after the page changes: only real movement counts
       const moved = lastX == null || Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY) >= 3;
       lastX = e.clientX; lastY = e.clientY;
       if (!moved) return;
     }
-    const press = !!e && ['mousedown', 'pointerdown', 'keydown', 'touchstart'].includes(e.type);
-    if (!running && e && Date.now() < swallowUntil && ['mouseup', 'click', 'keyup', 'pointerup'].includes(e.type)) { e.stopPropagation(); e.preventDefault(); return; } // the rest of the press that ended it
+    if (!running && e && Date.now() < swallowUntil && ['mousedown', 'touchstart', 'mouseup', 'click', 'keyup', 'pointerup'].includes(e.type)) { e.stopPropagation(); e.preventDefault(); return; } // the rest of the press that ended it
     const was = running;
     lastActive = Date.now();
     if (was) { stop(); if (press) { swallowUntil = Date.now() + 600; e.stopPropagation(); e.preventDefault(); } }
@@ -1558,7 +1571,14 @@
     layer.style.cssText = `background-image:url(${src});--s0:${s0};--s1:${s1};--x0:${dir()}%;--y0:${dir() / 2}%;--x1:${dir()}%;--y1:${dir() / 2}%;`;
     layer.classList.remove('show'); void layer.offsetWidth; layer.classList.add('show'); // (restarts its drift)
   }
-  let graceUntil = 0;
+  let graceUntil = 0, cursorTimer = 0, pointerIn = true;
+  const wakeCursor = () => { // visible now; hidden after 3 seconds without moving (only while the mouse is over the app)
+    el.classList.remove('hide-cursor');
+    clearTimeout(cursorTimer);
+    cursorTimer = setTimeout(() => { if (running && pointerIn) el.classList.add('hide-cursor'); }, 3000);
+  };
+  document.documentElement.addEventListener('mouseleave', () => { pointerIn = false; clearTimeout(cursorTimer); el.classList.remove('hide-cursor'); });
+  document.documentElement.addEventListener('mouseenter', () => { pointerIn = true; if (running) wakeCursor(); });
   async function start(preview) {
     const id = ++runId;
     starting = true;
@@ -1570,6 +1590,7 @@
     if (preview) graceUntil = Date.now() + 1500; // used again while the first picture was being found
     running = true; el.hidden = false; void el.offsetWidth; el.classList.add('on');
     window.aredl.idleFullscreen(true).catch(() => {}); // the whole screen, title bar included
+    wakeCursor();
     front = 0; show(layers[0], first.src); caption(0, first.level); caps[0].classList.add('show');
     let next = pickPicture();
     while (id === runId) {

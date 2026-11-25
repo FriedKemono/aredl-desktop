@@ -139,6 +139,7 @@
   window.openPack = async function (packId, mode) {
     mode = mode || tabModes.packs || 'classic';
     const m = fx.openModal({ title: 'Pack', wide: true });
+    const packOverlay = m.box.closest('.fx-overlay'); if (packOverlay) packOverlay.classList.add('keeps-video'); // a video playing on the page behind carries on where it is (dimmed)
     m.body.innerHTML = '<div class="state">Loading the pack…</div>';
     try {
       let tiers = await ensureTiers(mode);

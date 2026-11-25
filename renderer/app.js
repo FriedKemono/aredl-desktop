@@ -2621,7 +2621,10 @@ function plResolve(e) {
   const pointsNum = auto.points === false
     ? (Number.isNaN(parseFloat(String(man.points || '').replace(/,/g, ''))) ? null : parseFloat(String(man.points).replace(/,/g, '')))
     : (sn.points != null ? sn.points / 10 : null);
+  // the AREDL placement as a number (from the list, or from what you typed when that field is off Auto): #1 is an Infinite Demon
+  const topNum = auto.placement === false ? (parseInt(String(man.placement || '').replace(/\D/g, ''), 10) || null) : (sn.position ?? null);
   return {
+    difficulty: plDiffAuto(e) ? plAutoDifficulty(tierNum, topNum) : (e.difficulty || ''),
     name: auto.name === false ? (man.name || '') : (sn.name || e.snap?.name || ''),
     id: auto.id === false ? (man.id || '') : (sn.level_id ?? e.level_id ?? ''),
     placement: auto.placement === false ? (man.placement || '—') : placementAuto,
@@ -2784,7 +2787,7 @@ function renderPersonal() {
     return `<div class="pl-row${cls}${inProgress ? ' progress' : ''}"${inProgress ? ` style="--from:${plStartOf(e) ?? 0}%;--pct:${Number(e.percent)}%"` : ''}>
       ${first}
       <span class="pl-name">${r.jumpId != null ? `<a href="#" class="level-link" data-jump="${escapeHtml(String(r.jumpId))}">${escapeHtml(r.name || '—')}</a>` : escapeHtml(r.name || '—')}</span>
-      <span class="pl-cell">${e.difficulty ? `<span class="pl-diff" style="--c:${PL_DIFFS[e.difficulty] || '#555'}">${escapeHtml(e.difficulty)}</span>` : '—'}</span>
+      <span class="pl-cell">${r.difficulty ? `<span class="pl-diff" style="--c:${PL_DIFFS[r.difficulty] || '#555'}">${escapeHtml(r.difficulty)}</span>` : '—'}</span>
       ${cell('Tier', r.tier != null ? fmtTier(r.tier) : '', r.tier != null ? fmtTier(r.tier) : '')}
       ${cell('AREDL placement', escapeHtml(r.placement), r.placement)}
       ${cell('Points', escapeHtml(r.points), r.points)}
@@ -2837,6 +2840,21 @@ const PL_DIFFS = {
   'Supreme Demon': '#78230d', 'Ultimate Demon': '#6a1f0b', 'Horrendous Demon': '#5b1a09', 'Inhumane Demon': '#4b0e10',
   'Slaughter Demon': '#3f0f24', 'Apocalyptic Demon': '#35113f', 'Divine Demon': '#2a0f4a', 'Silent Demon': '#1b0a30', 'Infinite Demon': '#000000',
 };
+// Which difficulty a tier is, for the entries on Auto (the Demon difficulty list): the tier is rounded to the nearest whole number, 39 and up is a
+// Silent Demon, and the AREDL #1 is an Infinite Demon whatever its tier. Below Tier 21 there is no name.
+const PL_DIFF_BY_TIER = {
+  21: 'Bizarre Demon', 22: 'Brutal Demon', 23: 'Extreme Demon', 24: 'Radical Demon', 25: 'Radical Demon', 26: 'Supreme Demon', 27: 'Supreme Demon',
+  28: 'Ultimate Demon', 29: 'Horrendous Demon', 30: 'Horrendous Demon', 31: 'Inhumane Demon', 32: 'Inhumane Demon', 33: 'Slaughter Demon',
+  34: 'Slaughter Demon', 35: 'Apocalyptic Demon', 36: 'Apocalyptic Demon', 37: 'Divine Demon', 38: 'Divine Demon',
+};
+function plAutoDifficulty(tier, position) {
+  if (position === 1) return 'Infinite Demon';
+  if (tier == null || !Number.isFinite(tier)) return '';
+  const t = Math.round(tier);
+  return t >= 39 ? 'Silent Demon' : (PL_DIFF_BY_TIER[t] || '');
+}
+// An entry made before Auto existed keeps the difficulty it has; one with none, and every new one, is on Auto.
+const plDiffAuto = (e) => (e.auto && typeof e.auto.difficulty === 'boolean' ? e.auto.difficulty : !e.difficulty);
 const plPhysicsOf = (e) => (e.auto && e.auto.physics === true ? e.version : e.physics) || '';
 
 // ---- the app's own date picker (no browser one) ----
@@ -2996,6 +3014,20 @@ function plSyncAuto() {
     if (on) inp.value = vals[k];
     inp.disabled = on;
   });
+  plSyncDifficulty();
+}
+// Difficulty on Auto follows the tier and AREDL placement shown in the form (whether those are the list's or typed), and is locked
+function plSyncDifficulty() {
+  const on = plInput('AutoDifficulty').checked;
+  const sel = plInput('Difficulty');
+  if (on) {
+    const tier = parseFloat(String(plInput('Tier').value).replace(',', '.'));
+    const top = (String(plInput('Placement').value).match(/^\s*top\s*(\d+)\s*$/i) || [])[1];
+    sel.value = plAutoDifficulty(Number.isFinite(tier) ? tier : null, top ? Number(top) : null);
+  }
+  sel.disabled = on;
+  const btn = sel.closest('.dd') && sel.closest('.dd').querySelector('.dd-btn');
+  if (btn) btn.disabled = on;
 }
 // Physics follows the Version box (with "Phys" shown after it) while its Auto switch is on
 function plSyncPhysics() {
@@ -3059,7 +3091,8 @@ function plOpen(entry) {
     plInput('Auto' + K).checked = auto[k] !== false;
     plInput(K).value = auto[k] === false ? (man[k] ?? '') : '';
   });
-  plInput('Difficulty').value = entry?.difficulty || '';
+  plInput('AutoDifficulty').checked = entry ? plDiffAuto(entry) : true;
+  plInput('Difficulty').value = entry && !plDiffAuto(entry) ? (entry.difficulty || '') : '';
   plInput('Attempts').value = entry?.attempts ?? '';
   plInput('Version').value = entry?.version || appSettings.plLastVersion || '';
   plInput('AutoPhysics').checked = entry ? (entry.auto && entry.auto.physics === true) : true;
@@ -3091,6 +3124,7 @@ async function plSave() {
     if (!auto[k]) manual[k] = plInput(K).value.trim();
   });
   auto.physics = plInput('AutoPhysics').checked; // Physics follows Version
+  auto.difficulty = plInput('AutoDifficulty').checked; // Difficulty follows the tier (and #1)
   if ((plInput('Day').value || plInput('Month').value || plInput('Year').value) && !plInput('Date').value) { showToast('That date isn\'t complete or valid'); return; }
   const run = plParseRun(plInput('Percent').value);
   if (!run) { showToast('Progress should be like 100, 79 or a run such as 53-79'); return; }
@@ -3103,7 +3137,7 @@ async function plSave() {
     level_id: plPicked?.level_id ?? (manual.id || null),
     snap: plPicked ? plSnap(plPicked) : { name: manual.name },
     auto, manual,
-    difficulty: plInput('Difficulty').value.trim(),
+    difficulty: auto.difficulty ? '' : plInput('Difficulty').value.trim(),
     attempts: num(plInput('Attempts').value) != null ? Math.max(0, Math.round(num(plInput('Attempts').value))) : null,
     physics: plInput('AutoPhysics').checked ? plInput('Version').value.trim() : plInput('Physics').value.trim(),
     version: plInput('Version').value.trim(),
@@ -3127,7 +3161,7 @@ function plCsv() {
   const q = (v) => { const t = String(v ?? ''); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
   const head = ['#', 'Level', 'Difficulty', 'Tier', 'AREDL Placement', 'Points', 'Attempts', 'Completions', 'Progress %', 'Date', 'Physics', 'Version', 'Days Since', 'ID', 'Video'];
   const line = (rank, { e, r }, completions, progress) => [
-    rank, r.name, e.difficulty, r.tier != null ? fmtTier(r.tier) : '', r.placement, r.points, e.attempts ?? '',
+    rank, r.name, r.difficulty, r.tier != null ? fmtTier(r.tier) : '', r.placement, r.points, e.attempts ?? '',
     completions, progress, plFmtDate(e.date), plPhysicsOf(e), e.version, plDaysSince(e.date) ?? '', r.id, e.video,
   ].map(q).join(',');
   const lines = [head.join(',')];
@@ -3160,6 +3194,8 @@ $('#plLevelResults').addEventListener('click', (e) => {
   if (l) plPick(l);
 });
 PL_AUTO.forEach(([K]) => plInput('Auto' + K).addEventListener('change', plSyncAuto));
+plInput('AutoDifficulty').addEventListener('change', plSyncDifficulty);
+['Tier', 'Placement'].forEach(K => plInput(K).addEventListener('input', plSyncDifficulty)); // a tier or placement you type moves an Auto difficulty too
 plInput('AutoPhysics').addEventListener('change', plSyncPhysics);
 plInput('Percent').addEventListener('input', plSyncPercent);
 plInput('Version').addEventListener('input', plSyncPhysics);
@@ -4663,6 +4699,49 @@ function findYoutubeUrl(obj, seen = new Set()) {
   return null;
 }
 
+// Medal clips: a link to a clip (medal.tv/clips/ID, /clip/ID/HASH, /games/GAME/clips/ID, ...) has the clip's id, and sometimes a second part;
+// Medal's own embed address is medal.tv/clip/ID[/HASH]
+function findMedalUrl(obj, seen = new Set()) {
+  if (!obj || typeof obj !== 'object' || seen.has(obj)) return null;
+  seen.add(obj);
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && /medal\.tv/i.test(v) && medalParts(v)) return v;
+    if (v && typeof v === 'object') {
+      const found = findMedalUrl(v, seen);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+function medalParts(url) {
+  const m = String(url).match(/medal\.tv\/(?:[a-z]{2}\/)?(?:games\/[^/?#]+\/|u(?:sers)?\/[^/?#]+\/)?clips?\/([\w-]{3,60})(?:\/([\w-]{3,60}))?/i)
+    || String(url).match(/medal\.tv\/?\?[^#]*contentId=([\w-]{3,60})/i);
+  return m ? { id: m[1], hash: m[2] || '' } : null;
+}
+
+// Twitch: a record's video is a VOD (twitch.tv/videos/ID, also /CHANNEL/video/ID and /CHANNEL/v/ID, with an optional t= / time= position) or, in older
+// data, a clip (clips.twitch.tv/SLUG, twitch.tv/CHANNEL/clip/SLUG)
+function findTwitchUrl(obj, seen = new Set()) {
+  if (!obj || typeof obj !== 'object' || seen.has(obj)) return null;
+  seen.add(obj);
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && /twitch\.tv/i.test(v) && twitchParts(v)) return v;
+    if (v && typeof v === 'object') {
+      const found = findTwitchUrl(v, seen);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+function twitchParts(url) {
+  const s = String(url);
+  const time = (s.match(/[?&](?:t|time)=([\dhms]{1,20})(?:&|#|$)/i) || [])[1] || '';
+  let m = s.match(/twitch\.tv\/(?:[\w-]+\/)?(?:videos?|v)\/(\d{3,15})/i) || s.match(/player\.twitch\.tv\/?\?[^#]*video=v?(\d{3,15})/i);
+  if (m) return { kind: 'video', id: m[1], time };
+  m = s.match(/clips\.twitch\.tv\/(?:embed\?clip=)?([\w-]{3,100})/i) || s.match(/twitch\.tv\/[\w-]+\/clip\/([\w-]{3,100})/i);
+  return m ? { kind: 'clip', id: m[1], time: '' } : null;
+}
+
 function youtubeThumbId(url) {
   const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,})/i);
   return m ? m[1] : null;
@@ -4754,189 +4833,179 @@ function findLevelRefDeep(obj, seen = new Set(), depth = 0) {
 }
 
 // ---------------------------------------------------------------------------
-// Video players
+// Video player
 //
-// Every video is a "dock": a YouTube iframe that lives outside all the pages. A page
-// only holds an empty "slot" where the video should appear, and the dock is laid
-// over that slot while it's on screen, so the video looks like part of the page.
-// The iframe never moves in the DOM, so it never reloads.
+// The video is played by a window of its own (main.js, renderer/mini.html) ALL the time. A page only holds an empty "slot" where the video
+// should appear, and the window is laid exactly over that slot while it is on screen ("docked": it can't be moved and has no controls of its
+// own), so the video looks like part of the page; it follows the page when it scrolls. When a playing video's slot goes away (you changed tab,
+// opened another level or submission, minimised the app) the same window pops out: it glides to the corner, goes on top of everything and can
+// be moved and resized there. Nothing is handed over or reloaded, so there is no delay and the sound never cuts. (Or the video is hidden /
+// paused / stopped instead, per Settings > Videos.)
 //
-// When a playing video's slot goes away (you changed tab, opened another level or
-// submission, scrolled it off...) the dock keeps playing, in the corner player: a window of
-// its own, handed the video without a gap (or hidden / paused / stopped, per Settings >
-// Videos). A new video starts in its own dock, and the old one only disappears once the new
-// one actually starts playing - so at most one video ever plays. The corner player is
-// dragged by its top bar, resized from any corner or edge, sent back, or closed.
+// A native window can't sit under the page's own elements, so when something of the page is above the video (a menu, the command palette, a
+// message...) the window steps aside and the slot shows the video's picture until it is out of the way again.
+//
+// At most one video has a player: a level's video gets YouTube's own (paused) player when nothing else is playing; while another video plays,
+// the slot shows a play button instead, and pressing it takes the player over.
 // ---------------------------------------------------------------------------
 const docks = new Set();
 let currentDock = null;                       // the dock that belongs to the page's current video slot
 let dockLoopRunning = false;
+let floatCtx = null;                          // set while the video is popped out into the corner: { vid, dock, auto, live }
 
 function slotHtml(vid) {
-  return `<div class="video-slot" data-vid="${escapeHtml(vid)}" style="--thumb:url(https://img.youtube.com/vi/${escapeHtml(vid)}/hqdefault.jpg)">
-    <button class="slot-play" aria-label="Play video"><svg viewBox="0 0 68 48"><path d="M66.5 7.7a8.5 8.5 0 0 0-6-6C55.3.3 34 .3 34 .3S12.7.3 7.5 1.7a8.5 8.5 0 0 0-6 6C0 13 0 24 0 24s0 11 1.5 16.3a8.5 8.5 0 0 0 6 6C12.7 47.7 34 47.7 34 47.7s21.3 0 26.5-1.4a8.5 8.5 0 0 0 6-6C68 35 68 24 68 24s0-11-1.5-16.3z" fill="#f00"/><path d="M45 24 27 14v20" fill="#fff"/></svg></button>
-    <span class="slot-away-msg">Playing in the corner player</span>
+  return `<div class=\"video-slot\" data-vid=\"${escapeHtml(vid)}\" style=\"--thumb:url(https://img.youtube.com/vi/${escapeHtml(vid)}/hqdefault.jpg)\">
+    <span class=\"slot-away-msg\">Playing in the corner player</span>
+    <span class=\"slot-error\"></span>
   </div>`;
 }
-// 'live' = a player is on it, 'away' = its video is in the corner, 'idle' = no player (press play to start one)
+// 'live' = the player is on it, 'away' = its video is popped out into the corner, 'idle' = no player (one is put on it as soon as it is on screen)
 function setSlotState(slot, st) {
   if (!slot) return;
   slot.classList.toggle('away', st === 'away');
   slot.classList.toggle('idle', st === 'idle');
 }
 
-// The corner player is a window of its own (main.js, renderer/mini.html), never part of this page, so it is the same player whether
-// it sits next to the app or on another screen, and it never has to change into a different player while it is being moved.
-// A video goes there without a gap: the window loads it muted next to the one here, says when it plays ("mini:primed"), this page
-// answers with the exact moment ("mini:go") and stops its own player, and the window seeks there and unmutes. Coming back is the same
-// the other way round: this page loads the video muted, and once it plays it unmutes and the window is closed.
-let floatCtx = null;      // the video that is in the corner player (or on its way there): { vid, dock, onReturn, auto, live }
-let pendingResume = null; // where to carry on when a video comes back from the corner player: { vid, time, playing, at }
-window.aredl.onMiniPrimed(() => {
-  const f = floatCtx;
-  if (!f || f.live || !f.dock || !docks.has(f.dock)) return;
-  f.live = true;
-  window.aredl.miniGo({ time: f.dock.liveTime(), playing: f.dock.isPlaying() });
-  f.dock.enterFloat();
+// Where a video is played: with “Move it to a corner player” it is a window of its own (so it can pop out); with any other choice it is an
+// iframe inside the page itself, so menus, the command palette and messages are drawn above it like above any other element.
+const dockHostKind = () => ((appSettings.videoOnLeave || 'popup') === 'popup' ? 'window' : 'page');
+function applyPlayerState(d, st) { // YouTube's reports (from a player window, or from the iframe in the page)
+  if (typeof st.time === 'number') { d.time = st.time; d.timeAt = Date.now(); }
+  if (typeof st.error === 'number') { d.error = st.error; return; }
+  if (typeof st.state === 'number') {
+    const was = d.playing;
+    d.stateKnown = true;
+    d.playing = st.state === 1 || st.state === 3;
+    if (d.playing && !was) onDockStartedPlaying(d);
+  }
+}
+window.aredl.onPlayerState((st) => {
+  const d = [...docks].find(x => x.id === st.id && x.host === 'window');
+  if (d) applyPlayerState(d, st);
 });
-window.aredl.onMiniReturned((d) => {
-  const f = floatCtx;
-  if (!f || f.vid !== d.vid) return;
-  const dock = f.dock;
-  if (!f.live) { if (dock) dock.cancelOut(); return; } // still on its way there: the video simply stays where it is
-  floatCtx = null;
-  pendingResume = { vid: d.vid, time: d.time, playing: d.playing, at: Date.now() };
-  if (dock) dock.returning = 0;
-  if (!d.quiet && f.onReturn) { try { f.onReturn(); } catch { /* the page could not be opened */ } }
-  if (dock && docks.has(dock) && dock.mode === 'float') {
-    if (dock.slot && dock.slot.isConnected) dock.restore();
-    else setTimeout(() => { if (docks.has(dock) && dock.mode === 'float' && pendingResume && pendingResume.vid === dock.vid) dock.restore(); }, 3000);
+document.addEventListener('fullscreenchange', () => { // a player in the page goes full screen (or comes back): no transform or clip of the page's layout is on it meanwhile
+  for (const d of docks) {
+    if (d.host !== 'page' || !d.el) continue;
+    const fs = document.fullscreenElement === d.frame;
+    d.el.classList.toggle('fs', fs);
+    if (!fs) d.lastKey = ''; // placed again on the next frame
   }
 });
-window.aredl.onMiniClosed(() => { // the person closed the corner player
-  floatCtx = null;
-  [...docks].filter(d => d.mode === 'float' || d.outgoing).forEach(d => d.destroy());
+window.addEventListener('message', (e) => { // ...from an iframe in the page
+  for (const d of docks) if (d.host === 'page' && d.frame && e.source === d.frame.contentWindow) { d.pageMessage(e.data); return; }
 });
-// the app is minimised or tucked into the tray while a video plays: the video carries on in the corner player
+// A video started playing: one at a time. A popped-out / hidden player disappears at once; one still on a page just pauses.
+function onDockStartedPlaying(d) {
+  [...docks].forEach(o => {
+    if (o === d) return;
+    if (o.mode === 'corner' || !o.slot || (o.mode === 'hidden' && o.isPlaying())) o.destroy();
+    else if (o.isPlaying()) o.command('pauseVideo');
+  });
+}
+window.aredl.onPlayerReturn((r) => { // "Back to the level" on the popped-out player: the video's page opens, and the player docks over its video there
+  const d = [...docks].find(x => x.id === r.id && x.mode === 'corner');
+  if (!d) return;
+  d.auto = false; d.wantBack = Date.now();
+  if (d.onReturn) { try { d.onReturn(); } catch { /* the page could not be opened */ } }
+});
+window.aredl.onPlayerClosed((r) => { const d = [...docks].find(x => x.id === r.id); if (d) d.destroy(false, true); }); // the person closed the player
+// the app is minimised or tucked into the tray while a video plays: the video carries on in the corner
 window.aredl.onWindowAway(() => {
-  if (floatCtx) return;
-  const d = [...docks].find(x => x.mode !== 'float' && x.isPlaying());
-  if (d) d.floatOut(true);
+  if ((appSettings.videoOnLeave || 'popup') !== 'popup') return; // the corner player is only used when the setting “Move it to a corner player” is on
+  const d = [...docks].find(x => x.mode !== 'corner' && x.isPlaying());
+  if (d) d.toCorner(true);
 });
 // ...and when the app is back, a video that was on its level's page goes back to it (one that was in the corner stays there)
 window.aredl.onWindowBack(() => {
-  const f = floatCtx;
-  if (!f || !f.auto) return;
-  if (!f.live) { if (f.dock) f.dock.cancelOut(); }
-  else if (f.dock) f.dock.requestBack();
-  else window.aredl.miniRequestReturn(true);
+  const d = [...docks].find(x => x.mode === 'corner' && x.auto);
+  if (d) d.auto = false; // (layout docks it again if its page is showing)
 });
 
+let dockSeq = 0;
 class VideoDock {
   constructor() {
-    this.el = document.getElementById('dockTemplate').content.firstElementChild.cloneNode(true);
-    this.frame = this.el.querySelector('iframe');
-    document.body.appendChild(this.el);
+    this.id = ++dockSeq;
+    this.error = 0; // YouTube's reason for not being able to play the video (its error code), once it says
     this.vid = null; this.slot = null; this.origin = null; this.clipParents = [];
     this.title = ''; this.onReturn = null;
     this.playing = false; this.stateKnown = false; this.assumePlaying = false; this.paused = false;
-    this.mode = 'off'; // 'inline' (over its page's slot), 'off' (hidden, maybe still playing) or 'float' (its video is in the corner player)
-    this.leaveSince = 0; this.hiddenByLeave = false; this.lastCss = '';
-    this.lastPing = 0; this.parkedAt = 0; this.time = 0; this.timeAt = 0; this.lastRect = null;
-    this.outgoing = false;   // the corner player is getting ready to take the video over
-    this.incoming = null;    // the video is coming back from the corner player: { time, playing, at }
-    this.incomingTimer = null; this.returning = 0; this.floatSince = 0; this.noFloatUntil = 0; this.outTimer = 0;
+    this.mode = 'hidden'; // 'docked' (over its page's slot), 'corner' (popped out) or 'hidden' (out of sight, maybe still playing)
+    this.time = 0; this.timeAt = 0; this.leaveSince = 0; this.parked = false;
+    this.auto = false; this.cornerSince = 0; this.wantBack = 0;
+    this.lastKey = ''; this.cover = 'none'; this.coverVotes = 0; this.frameNo = 0; this.lastRect = null;
+    this.host = dockHostKind(); // 'window' (a player window of its own) or 'page' (an iframe inside the page); fixed for the life of this player
+    this.el = null; this.frame = null; this.pingTimer = 0; this.pageHostName = 'www.youtube.com'; this.triedNoCookie = false; this.pageArgs = null;
     docks.add(this);
-    this.frame.addEventListener('load', () => this.ping());
     if (!dockLoopRunning) { dockLoopRunning = true; requestAnimationFrame(dockLoop); }
   }
 
   // where the video is now, from the last report YouTube sent
   liveTime() { return (this.time || 0) + (this.isPlaying() && this.timeAt ? (Date.now() - this.timeAt) / 1000 : 0); }
-
-  // The video goes to the corner player. This player carries on (hidden, if its page is out of view) until the window plays it.
-  floatOut(auto = false) {
-    if (!this.vid || !docks.has(this) || this.outgoing || this.incoming || this.mode === 'float' || Date.now() < this.noFloatUntil) return;
-    if (floatCtx && floatCtx.dock && floatCtx.dock !== this) floatCtx.dock.destroy(); // one corner player at a time
-    const body = [...document.body.classList].filter(c => c !== 'nav-editing').join(' ');
-    floatCtx = { vid: this.vid, dock: this, onReturn: this.onReturn, auto, live: false };
-    this.outgoing = true;
-    const failed = () => { if (floatCtx && floatCtx.dock === this) floatCtx = null; this.outgoing = false; this.noFloatUntil = Date.now() + 20000; };
-    clearTimeout(this.outTimer);
-    this.outTimer = setTimeout(() => { if (this.outgoing && floatCtx && floatCtx.dock === this && !floatCtx.live) { this.noFloatUntil = Date.now() + 20000; this.cancelOut(); } }, 12000); // the window never got its video playing: the video stays here
-    window.aredl.miniOpen({
-      vid: this.vid, time: this.liveTime(), playing: this.isPlaying(), handover: true, title: this.title, auto, from: auto ? null : this.lastRect,
-      rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: body,
-    }).then(ok => { if (!ok) failed(); }).catch(failed);
-  }
-  // the page came back into view before the window took over: the video stays here
-  cancelOut() {
-    if (!this.outgoing) return;
-    this.outgoing = false; clearTimeout(this.outTimer); this.noFloatUntil = Math.max(this.noFloatUntil, Date.now() + 1500); // (not straight away again)
-    if (floatCtx && floatCtx.dock === this) { floatCtx = null; window.aredl.miniClose(); }
-  }
-  // the corner player plays the video now: this player stops (the page keeps its slot, which says where the video went)
-  enterFloat() {
-    this.outgoing = false; clearTimeout(this.outTimer); this.el.style.pointerEvents = '';
-    this.mode = 'float'; this.floatSince = Date.now(); this.returning = 0;
-    this.playing = false; this.stateKnown = false; this.assumePlaying = false; this.lastCss = '';
-    this.frame.src = 'about:blank';
-    this.el.classList.add('off');
-    if (this.slot) setSlotState(this.slot, 'away');
-  }
-  requestBack() { // ask the corner player to hand the video back (without opening the video's page: it is already on screen)
-    if (this.returning) return;
-    this.returning = Date.now();
-    window.aredl.miniRequestReturn(true);
-  }
-  // the video comes back from the corner player: load it here, muted, at the same moment
-  restore() {
-    this.mode = 'off'; this.lastCss = ''; this.leaveSince = 0; this.hiddenByLeave = false; this.returning = 0;
-    this.el.classList.add('off');
-    this.load(this.vid, false);
-    if (this.slot) setSlotState(this.slot, 'live');
-  }
-  // it plays here: carry on from where the corner player is (it kept playing meanwhile), unmute, and let the window go
-  finishBack() {
-    const inc = this.incoming;
-    if (!inc) return;
-    this.incoming = null; clearTimeout(this.incomingTimer);
-    if (inc.playing) {
-      const t = inc.time + (Date.now() - inc.at) / 1000;
-      if (Math.abs(t - this.liveTime()) > 0.7) this.command('seekTo', [t, true]);
-      this.command('unMute'); setTimeout(() => this.command('unMute'), 500);
-    }
-    const at = this.slot && this.slot.isConnected ? this.measure('inline') : null; // the window glides to where the video is on the page, then closes
-    window.aredl.miniClose(at ? { to: { left: at.left, top: at.top, width: at.width, height: at.height } } : undefined);
-  }
-
-  ping() {
-    this.lastPing = Date.now();
-    try { this.frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*'); } catch { /* not ready */ }
-  }
-  command(func, args) {
-    try { this.frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: args === undefined ? '' : args }), '*'); } catch { /* not ready */ }
-  }
   // Counts as "playing" once YouTube says so (until it has said anything: only if we asked for autoplay).
   isPlaying() { return this.stateKnown ? this.playing : this.assumePlaying; }
+  command(func, args) {
+    if (this.host === 'page') this.pagePost({ event: 'command', func, args: args === undefined ? '' : args });
+    else window.aredl.playerCmd(this.id, func, args);
+  }
 
-  load(vid, autoplay) {
-    this.vid = vid;
-    let start = '', mute = '';
-    this.incoming = null; clearTimeout(this.incomingTimer);
-    if (pendingResume && pendingResume.vid === vid) { // coming back from the corner player: same moment, same state
-      const st = pendingResume;
-      pendingResume = null;
-      if (st.time > 1) start = `&start=${Math.floor(st.time)}`;
-      autoplay = autoplay || st.playing;
-      this.time = st.time || 0; this.timeAt = Date.now();
-      this.incoming = { time: st.time || 0, playing: !!st.playing, at: st.at || Date.now() };
-      if (st.playing) mute = '&mute=1'; // the corner player is still playing it: nothing is heard twice
-      else this.frame.addEventListener('load', () => setTimeout(() => this.finishBack(), 700), { once: true });
-      this.incomingTimer = setTimeout(() => this.finishBack(), 9000); // never leave the window waiting
+  // ---- a player inside the page (any setting but “Move it to a corner player”) ----
+  pageLoad(vid, autoplay, time) {
+    this.pageDestroy();
+    const el = document.getElementById('dockTemplate').content.firstElementChild.cloneNode(true);
+    el.classList.add('page');
+    this.el = el; this.frame = el.querySelector('iframe');
+    this.pageHostName = 'www.youtube.com'; this.triedNoCookie = false; this.pageArgs = { autoplay: !!autoplay, time: Number(time) || 0 };
+    this.frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+    this.frame.addEventListener('load', () => { this.pagePost({ event: 'listening', id: 1, channel: 'widget' }); clearInterval(this.pingTimer); this.pingTimer = setInterval(() => this.pagePost({ event: 'listening', id: 1, channel: 'widget' }), 3000); });
+    document.body.appendChild(el);
+    this.pageSrc();
+  }
+  pageSrc() {
+    const a = this.pageArgs, start = a.time > 1 ? `&start=${Math.floor(a.time)}` : '';
+    this.frame.src = `https://${this.pageHostName}/embed/${encodeURIComponent(this.vid)}?origin=${encodeURIComponent(location.origin)}${a.autoplay ? '&autoplay=1' : ''}${start}&enablejsapi=1`;
+  }
+  pagePost(obj) { try { this.frame.contentWindow.postMessage(JSON.stringify(obj), '*'); } catch { /* not ready */ } }
+  pageMessage(data) { // what YouTube's player says: where it is, whether it plays, why it can't
+    let d = data;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch { return; } }
+    if (!d) return;
+    let state = null, time = null;
+    if (d.event === 'infoDelivery' && d.info) {
+      if (typeof d.info.currentTime === 'number') time = d.info.currentTime;
+      if (typeof d.info.playerState === 'number' && d.info.playerState !== -1) state = d.info.playerState;
+    } else if (d.event === 'onStateChange' && typeof d.info === 'number' && d.info !== -1) state = d.info;
+    if (d.event === 'onError' && typeof d.info === 'number') {
+      if ((d.info === 152 || d.info === 153) && !this.triedNoCookie) { this.triedNoCookie = true; this.pageHostName = 'www.youtube-nocookie.com'; this.pageSrc(); return; } // once more through YouTube’s other embed address
+      applyPlayerState(this, { error: d.info });
+      return;
     }
+    if (state != null || time != null) applyPlayerState(this, { state, time });
+  }
+  pageDestroy() { clearInterval(this.pingTimer); this.pingTimer = 0; if (this.el) this.el.remove(); this.el = null; this.frame = null; }
+  // over its page's video: the iframe is laid over the slot (a fixed element below the menus, so they cover it), cut where the slot is scrolled out of view
+  pagePlace(t) {
+    const el = this.el;
+    if (!el) return;
+    const c = t.clip;
+    const key = [t.left, t.top, t.width, t.height, c.top, c.right, c.bottom, c.left].join(',');
+    if (key !== this.lastKey) {
+      this.lastKey = key;
+      el.style.width = t.width + 'px'; el.style.height = t.height + 'px';
+      el.style.transform = `translate3d(${t.left}px, ${t.top}px, 0)`;
+      el.style.clipPath = (c.top || c.right || c.bottom || c.left) ? `inset(${c.top}px ${c.right}px ${c.bottom}px ${c.left}px)` : 'none';
+    }
+    if (el.classList.contains('off')) el.classList.remove('off');
+  }
+
+  load(vid, autoplay, time = 0) {
+    this.vid = vid; this.error = 0;
     this.playing = false; this.stateKnown = false; this.assumePlaying = !!autoplay; this.paused = false;
-    this.frame.src = `https://www.youtube.com/embed/${vid}?origin=${encodeURIComponent(location.origin)}${autoplay ? '&autoplay=1' : ''}${mute}${start}&enablejsapi=1`;
+    this.time = time; this.timeAt = Date.now(); this.lastKey = '';
+    if (this.host === 'page') { this.pageLoad(vid, autoplay, time); return; }
+    window.aredl.playerLoad({
+      id: this.id, vid, time, autoplay: !!autoplay, title: this.title,
+      rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: [...document.body.classList].filter(c => c !== 'nav-editing').join(' '),
+    }).catch(() => {});
   }
   attach(slot, ctx) {
     this.slot = slot;
@@ -4944,46 +5013,78 @@ class VideoDock {
     slot._ctx = ctx;
     this.title = ctx.title || '';
     this.onReturn = ctx.onReturn || null;
-    if (floatCtx && floatCtx.dock === this) floatCtx.onReturn = this.onReturn;
     this.clipParents = [];
     for (let p = slot.parentElement; p && p !== document.body; p = p.parentElement) {
       const cs = getComputedStyle(p);
       if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') this.clipParents.push(p);
     }
-    if (this.mode !== 'float') this.el.classList.remove('off');
-    setSlotState(slot, this.mode === 'float' ? 'away' : 'live');
+    this.parked = false; this.lastKey = '';
+    setSlotState(slot, this.mode === 'corner' ? 'away' : 'live');
   }
-  // The page moved on to another video. This player keeps its slot (so it comes back to it if you
-  // return to that tab) and, if it's playing, carries on in the corner player without hesitating.
-  park() {
-    this.parkedAt = Date.now();
-    this.leaveSince = Date.now() - 1000;
-  }
-  destroy() {
+  // The page moved on to another video. This video keeps its slot (so it comes back to it if you return to that page) and, if it is
+  // playing, pops out into the corner at once.
+  park() { this.parked = true; this.leaveSince = Date.now() - 1000; }
+  destroy(replacing = false, fromWindow = false) {
     if (!docks.has(this)) return;
     docks.delete(this);
-    clearTimeout(this.incomingTimer);
-    if (floatCtx && floatCtx.dock === this) { floatCtx = null; window.aredl.miniClose(); }
-    if (!floatCtx && ![...docks].some(d => d.isPlaying())) window.aredl.miniWarm(null).catch(() => {}); // nothing plays any more: the ready corner player goes
-    this.frame.src = 'about:blank';
-    this.el.remove();
+    if (floatCtx && floatCtx.dock === this) floatCtx = null;
     if (currentDock === this) currentDock = null;
-    // the slot that showed this video can be played again
-    [this.origin, this.slot].forEach(sl => { if (sl && sl.isConnected) setSlotState(sl, 'idle'); });
+    if (this.host === 'page') this.pageDestroy();
+    else if (!replacing && !fromWindow) window.aredl.playerClose(this.id);
+    // the slot that showed this video gets a player again as soon as it is on screen
+    let any = false;
+    [this.origin, this.slot].forEach(sl => { if (sl && sl.isConnected) { setSlotState(sl, 'idle'); any = true; } });
+    if (any) requestAnimationFrame(redockIdleSlots);
   }
 
-  setRect(t) {
-    const el = this.el;
-    this.lastRect = { left: t.left, top: t.top, width: t.width, height: t.height };
-    el.style.left = t.left + 'px'; el.style.top = t.top + 'px';
-    el.style.width = t.width + 'px'; el.style.height = t.height + 'px';
-    const c = t.clip;
-    const clipped = c && (c.top > 0.5 || c.right > 0.5 || c.bottom > 0.5 || c.left > 0.5);
-    el.style.clipPath = clipped ? `inset(${Math.max(0, c.top)}px ${Math.max(0, c.right)}px ${Math.max(0, c.bottom)}px ${Math.max(0, c.left)}px round 10px)` : 'none';
+  // YouTube says the video can't be played here (the uploader switched embedding off, it is private, ...): the window steps aside and the
+  // slot says why, with a link to watch it on YouTube
+  showError() {
+    this.hide();
+    const slot = this.slot;
+    if (!slot || !slot.isConnected || slot.classList.contains('err')) return;
+    const why = this.error === 100 ? 'This video was removed or is private.'
+      : (this.error === 101 || this.error === 150) ? 'The uploader doesn’t allow this video to be played outside YouTube.'
+      : (this.error === 152 || this.error === 153) ? 'YouTube wouldn’t play this video here (player configuration error).'
+      : 'This video couldn’t be played here.';
+    const box = slot.querySelector('.slot-error');
+    if (!box) return;
+    box.textContent = '';
+    const msg = document.createElement('span'), a = document.createElement('a');
+    msg.textContent = `${why} (YouTube error ${this.error})`;
+    a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(this.vid)}`; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Watch on YouTube ↗';
+    box.append(msg, a);
+    slot.classList.add('err');
   }
 
-  // where the player goes over its page's slot, or null when too little of the slot is showing
-  measure(leave) {
+  // popped out: the player window glides to the corner and goes on top of everything
+  toCorner(auto = false) {
+    if ((appSettings.videoOnLeave || 'popup') !== 'popup') return; // only with the setting “Move it to a corner player”
+    if (this.host !== 'window' || this.mode === 'corner' || !this.vid || !docks.has(this)) return;
+    this.mode = 'corner'; this.auto = !!auto; this.cornerSince = Date.now(); this.wantBack = 0; this.lastKey = '';
+    floatCtx = { vid: this.vid, dock: this, auto: !!auto, live: true };
+    if (this.slot) setSlotState(this.slot, 'away');
+    [...docks].forEach(o => { if (o !== this && o.mode === 'corner') o.destroy(); }); // one popped-out player at a time
+    window.aredl.playerCorner({ id: this.id, instant: !!auto });
+  }
+  // back over its page's video (the player window glides there from the corner)
+  dockBack() {
+    if (this.mode !== 'corner') return;
+    this.mode = 'hidden'; this.auto = false; this.wantBack = 0; this.lastKey = '';
+    if (floatCtx && floatCtx.dock === this) floatCtx = null;
+    if (this.slot) setSlotState(this.slot, 'live');
+    this.layout();
+  }
+  hide() {
+    if (this.mode === 'hidden') return;
+    this.mode = 'hidden'; this.lastKey = '';
+    if (this.slot) setSlotState(this.slot, 'live');
+    if (this.host === 'page') { if (this.el) this.el.classList.add('off'); this.lastKey = ''; return; }
+    window.aredl.playerPlace({ id: this.id, mode: 'hidden' });
+  }
+
+  // where the video goes over its page's slot (with how much of it is out of view), or null when too little of the slot is showing
+  measure(minVis) {
     const slot = this.slot;
     if (!(slot && slot.isConnected)) return null;
     const tab = slot.closest('.tab');
@@ -4998,161 +5099,158 @@ class VideoDock {
     const title = slot.closest('.detail-scroll') && slot.closest('.detail-scroll').querySelector('.detail-title');
     if (title) top = Math.max(top, title.getBoundingClientRect().bottom); // the sticky title covers the top
     const vis = (Math.max(0, bottom - top) * Math.max(0, right - left)) / (r.width * r.height);
-    // the corner player takes over once less than half is showing; the other modes have nothing to hand over
-    // to, so the video simply stays where it is (clipped) until it has scrolled out of view
-    if (vis < (leave === 'popup' ? 0.5 : 0.04)) return null;
-    return { left: r.left, top: r.top, width: r.width, height: r.height, clip: { top: top - r.top, right: r.right - right, bottom: r.bottom - bottom, left: left - r.left } };
+    if (vis < minVis) return null;
+    return { left: r.left, top: r.top, width: r.width, height: r.height, clip: { top: Math.max(0, top - r.top), right: Math.max(0, r.right - right), bottom: Math.max(0, r.bottom - bottom), left: Math.max(0, left - r.left) } };
   }
-
-  // a video that is in the corner player: it comes back when its page is on screen again, or when the setting no longer asks for a corner player
-  layoutFloat() {
-    const f = floatCtx;
-    if (!f || f.dock !== this) { if (!(pendingResume && pendingResume.vid === this.vid)) this.destroy(); return; } // the window is gone (or the video is on its way back)
-    if (this.returning) { if (Date.now() - this.returning > 5000) this.returning = 0; return; }
-    const leave = appSettings.videoOnLeave || 'popup';
-    if (leave !== 'popup') { this.requestBack(); return; }
-    if (f.auto || !f.live) return; // one sent away because the app was minimised comes back with the app
-    if (Date.now() - this.floatSince > 500 && this.measure(leave)) this.requestBack();
+  // Is something of the page above the video? (A native window can't be under it, so the window steps aside while that is so; for the pack
+  // window it only dims, so a video that plays behind it carries on where it is.)
+  updateCover(t) {
+    const c = t.clip, vx = t.left + c.left, vy = t.top + c.top, vw = t.width - c.left - c.right, vh = t.height - c.top - c.bottom;
+    let state = 'none';
+    outer: for (const fy of [0.1, 0.5, 0.9]) {
+      for (const fx of [0.06, 0.28, 0.5, 0.72, 0.94]) {
+        const el = document.elementFromPoint(vx + vw * fx, vy + vh * fy);
+        if (!el || this.slot.contains(el)) continue;
+        if (el.closest('.keeps-video')) state = 'dim';
+        else { state = 'covered'; break outer; }
+      }
+    }
+    if (state === this.cover) this.coverVotes = 0;
+    else if (++this.coverVotes >= 2 || this.mode !== 'docked') { this.cover = state; this.coverVotes = 0; }
   }
 
   layout() {
-    if (this.mode === 'float') { this.layoutFloat(); return; }
-    if (!this.stateKnown && Date.now() - this.lastPing > 1500) this.ping(); // keep asking until YouTube answers
-    const el = this.el;
+    if (!this.vid || !docks.has(this)) return;
+    if (this.standalone) return; // opened from a record: it stays in the corner until it is closed
+    this.frameNo++;
+    if (this.error && this.mode !== 'corner') { this.showError(); return; }
+    if (this.host === 'page' && this.frame && document.fullscreenElement === this.frame) return; // full screen: the browser lays the player out, nothing moves it
+    if (this.host !== dockHostKind()) return; // (the setting just changed: dockLoop swaps this player for one of the other kind)
     const leave = appSettings.videoOnLeave || 'popup'; // popup | background | pause | stop
     const slot = this.slot;
-    const target = this.measure('inline');
-    let mode = target ? 'inline' : 'off';
-
-    // Why isn't it showing? 'tab' = its page is gone (another tab, another level); 'scroll' = still on its page, scrolled out of view.
     const slotInDom = !!(slot && slot.isConnected);
-    const pageActive = slotInDom && (!slot.closest('.tab') || slot.closest('.tab').classList.contains('active'));
+    const tab = slotInDom ? slot.closest('.tab') : null;
+    const pageActive = slotInDom && (!tab || tab.classList.contains('active'));
+    if (this.mode === 'corner') { this.layoutCorner(leave); return; }
+
+    const target = this.measure(0.04);
+    if (target) { // on its page
+      this.leaveSince = 0; this.paused = false; this.parked = false;
+      if (this.host === 'page') { this.mode = 'docked'; setSlotState(slot, 'live'); this.pagePlace(target); return; }
+      // While the page scrolls the video is moving; checking what is above it (several hit-tests) every other frame would slow the position
+      // updates down, so it is checked less often then (and as before when the video stands still). The video stays visible and follows the page.
+      const lr = this.lastRect, moving = !!lr && (Math.abs(lr.left - target.left) > 0.5 || Math.abs(lr.top - target.top) > 0.5);
+      if (this.mode !== 'docked' || this.frameNo % (moving ? 6 : 2) === 0) this.updateCover(target);
+      this.mode = 'docked';
+      setSlotState(slot, 'live');
+      const c = target.clip;
+      const key = [target.left, target.top, target.width, target.height, c.top, c.right, c.bottom, c.left].map(Math.round).join(',') + this.cover;
+      if (key !== this.lastKey) {
+        this.lastKey = key;
+        this.lastRect = { left: target.left, top: target.top, width: target.width, height: target.height };
+        window.aredl.playerPlace({ id: this.id, mode: 'docked', rect: target, covered: this.cover === 'covered', dim: this.cover === 'dim' });
+      }
+      return;
+    }
+
+    // not showing: 'tab' = its page is gone (another tab, another level); 'scroll' = still on its page, scrolled out of view
     const reason = pageActive ? 'scroll' : 'tab';
-    let freeze = false; // the player stays on screen exactly where it was while the corner player gets ready to take the video over
     const tabHidden = slotInDom && !pageActive; // switched tab: the slot is still there but hidden - no reason to wait
     // (a slot that vanished from the page can just be a quick re-render, so that case still gets the short wait below)
-
-    // Everything below is re-decided every frame from the current setting, so changing the setting while a video plays
-    // takes effect straight away.
-    if (mode === 'inline') {
-      this.leaveSince = 0;
-      this.paused = false;
-      this.hiddenByLeave = false;
-      if (this.outgoing && !(floatCtx && floatCtx.auto)) this.cancelOut(); // scrolled back before the corner player took over: the video stays
-    } else if (leave === 'popup' && reason === 'scroll' && !this.outgoing) {
-      // scrolled out of view on its own page: the video stays on the page (hidden, still playing) and shows again when scrolled back
-      this.leaveSince = 0; this.hiddenByLeave = false; this.paused = false;
-      mode = 'off';
-    } else if (leave === 'popup') {
-      if (this.outgoing) {
-        if (this.mode === 'inline') { freeze = true; el.style.pointerEvents = 'none'; } // (so the video doesn't blink out and then back)
-      } else if (this.hiddenByLeave) {
-        // a video hidden by another setting goes to the corner player when the setting changes to this
-        this.hiddenByLeave = false;
-        this.floatOut(false);
-      } else if (this.isPlaying()) {
-        if (!this.leaveSince) this.leaveSince = Date.now();
-        const settled = tabHidden || Date.now() - this.leaveSince > 120; // ignore a quick re-render of the page
-        if (settled) this.floatOut(false);
-        else mode = this.mode; // keep the last look for a moment
-      } else {
-        this.leaveSince = 0;
-      }
-    } else if (this.isPlaying()) {
-      // sound only / pause / stop: there is no corner player to hand over to, so it is hidden in the very frame
-      // it leaves its page - no waiting around (that wait is what let the video linger on screen for a moment)
-      if (reason === 'tab') { // leaving the page (switching tab / level) is what pause and stop are for - scrolling is not
-        if (leave === 'stop') { this.destroy(); return; }
-        if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; }
-      }
-      mode = 'off'; // hidden; unless it was just paused/stopped, it keeps playing
-      this.hiddenByLeave = true;
-    } else {
-      this.leaveSince = 0;
-      if (this.hiddenByLeave) mode = 'off';
+    if (!this.isPlaying()) { // nothing to carry on with
+      if (!slotInDom) { this.destroy(); return; }
+      this.hide();
+      return;
     }
-    if (this.mode === 'float') return; // (it just went to the corner player)
-    if (freeze) return;
-
-    // a player with no page slot and not playing has nothing left to do
-    const attached = !!(this.slot && this.slot.isConnected);
-    if (!attached && this !== currentDock && !this.isPlaying()) { this.destroy(); return; }
-
-    if (mode !== this.mode) {
-      this.mode = mode; el.style.pointerEvents = '';
-      el.classList.toggle('off', mode === 'off');
-      if (this.slot) setSlotState(this.slot, 'live');
+    if (leave === 'popup') {
+      if (reason === 'scroll' && !this.parked) { this.hide(); return; } // scrolled away on its own page: it stays there, hidden but playing
+      if (!this.leaveSince) this.leaveSince = Date.now();
+      if (tabHidden || this.parked || Date.now() - this.leaveSince > 120) this.toCorner(false); // ignore a quick re-render of the page
+      return;
     }
-    if (mode === 'off' || !target) return;
-
-    const c = target.clip;
-    const css = `${Math.round(target.left)}|${Math.round(target.top)}|${Math.round(target.width)}|${Math.round(target.height)}|${c ? [c.top, c.right, c.bottom, c.left].map(Math.round).join(',') : ''}`;
-    if (css === this.lastCss) return;
-    this.lastCss = css;
-    this.setRect(target);
+    // sound only / pause / stop: there is no corner player, so it is hidden in the very frame it leaves its page
+    if (reason === 'tab') { // leaving the page (switching tab / level) is what pause and stop are for - scrolling is not
+      if (leave === 'stop') { this.destroy(); return; }
+      if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; }
+    }
+    this.hide();
+  }
+  // a popped-out video comes back over its page when that is on screen again, or when the setting no longer asks for a corner player
+  layoutCorner(leave) {
+    if (leave !== 'popup') {
+      if (this.measure(0.04)) this.dockBack();
+      else if (leave === 'stop') this.destroy();
+      else { if (leave === 'pause' && !this.paused) { this.command('pauseVideo'); this.paused = true; } this.hide(); }
+      return;
+    }
+    if (this.auto) return; // one sent away because the app was minimised comes back with the app
+    if (this.wantBack) {
+      if (this.measure(0.04)) this.dockBack();
+      else if (Date.now() - this.wantBack > 4000) this.wantBack = 0;
+      return;
+    }
+    if (Date.now() - this.cornerSince > 500 && this.measure(0.5)) this.dockBack();
   }
 }
 
+// The setting changed between “Move it to a corner player” and the others: every player is replaced by one of the right kind, which carries on from
+// the same moment (a video that was popped out and has no page to return to is closed).
+let lastHostKind = null;
+function retargetDocks() {
+  const want = dockHostKind();
+  [...docks].forEach(d => {
+    if (d.host === want || d.standalone) return; // (a player opened from a record is always a window of its own)
+    const slot = d.slot && d.slot.isConnected ? d.slot : (d.origin && d.origin.isConnected ? d.origin : null);
+    const ctx = slot && slot._ctx, vid = d.vid, playing = d.isPlaying(), time = d.liveTime();
+    d.destroy();
+    if (slot && ctx && vid) dockPlay({ vid, slot, title: ctx.title, onReturn: ctx.onReturn, autoplay: playing, time });
+  });
+}
 function dockLoop() {
   if (!docks.size) { dockLoopRunning = false; return; }
+  const kind = dockHostKind();
+  if (lastHostKind === null) lastHostKind = kind; else if (kind !== lastHostKind) { lastHostKind = kind; retargetDocks(); }
   [...docks].forEach(d => d.layout());
   requestAnimationFrame(dockLoop);
 }
 
-// YouTube reports play / pause / end through postMessage once we say we're listening.
-window.addEventListener('message', (e) => {
-  const d = [...docks].find(x => x.frame.contentWindow === e.source);
-  if (!d) return;
-  let data = e.data;
-  if (typeof data === 'string') { try { data = JSON.parse(data); } catch { return; } }
-  if (!data) return;
-  if (data.event === 'infoDelivery' && data.info && typeof data.info.currentTime === 'number') { d.time = data.info.currentTime; d.timeAt = Date.now(); }
-  let st = null;
-  if (data.event === 'onStateChange' && typeof data.info === 'number') st = data.info;
-  else if (data.event === 'infoDelivery' && data.info && typeof data.info.playerState === 'number') st = data.info.playerState;
-  if (st == null || st === -1) return;
-  const was = d.playing;
-  d.stateKnown = true;
-  d.playing = st === 1 || st === 3;
-  if (d.playing && !was) { onDockStartedPlaying(d); if (d.incoming) d.finishBack(); }
-});
-// A video started playing: a leftover corner/hidden player goes away at once (no animation).
-function onDockStartedPlaying(d) {
-  // a corner player is made ready in the background for the video that plays, so handing it over later is quick
-  if ((appSettings.videoOnLeave || 'popup') === 'popup' && d.vid && !floatCtx) {
-    window.aredl.miniWarm({ vid: d.vid, time: d.liveTime(), title: d.title, rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: [...document.body.classList].filter(c => c !== 'nav-editing').join(' ') }).catch(() => {});
-  }
-  if (floatCtx && floatCtx.dock !== d) { const fd = floatCtx.dock; floatCtx = null; window.aredl.miniClose(); if (fd) fd.destroy(); } // one video at a time: the corner player closes
-  [...docks].forEach(o => {
-    if (o === d) return;
-    // a corner / hidden player disappears at once (no animation); one still on a page just pauses
-    if (o.mode === 'float' || !o.slot || (o.mode === 'off' && o.isPlaying())) o.destroy();
-    else if (o.isPlaying()) o.command('pauseVideo');
-  });
-}
-
-// Show `vid` in `slot`.
-function dockPlay({ vid, slot, title = '', onReturn = null, autoplay = false }) {
+// Show `vid` in `slot`: a video that already has a player moves to this slot; otherwise it gets one (YouTube's own, paused unless asked to play).
+function dockPlay({ vid, slot, title = '', onReturn = null, autoplay = false, time = 0 }) {
   const ctx = { title, onReturn };
-  let d = [...docks].find(x => x.vid === vid);
+  let d = [...docks].find(x => x.vid === vid && !x.standalone);
   if (d) {
-    d.attach(slot, ctx); // that video already has a player (maybe in the corner): bring it to this slot
-    if (d.mode === 'float') {
-      if (pendingResume && pendingResume.vid === vid) d.restore(); // it was just handed back: carry on here
-      else d.floatSince = 0;                                      // otherwise it comes back as soon as its page shows it
-    } else if (autoplay) { d.assumePlaying = true; d.command('playVideo'); }
+    d.attach(slot, ctx); // that video already has a player (maybe popped out): bring it to this slot
+    if (autoplay && !d.isPlaying()) { d.assumePlaying = true; d.command('playVideo'); }
   } else {
     d = new VideoDock();
-    d.load(vid, autoplay);
+    d.title = title; d.onReturn = onReturn;
+    d.load(vid, autoplay, time);
     d.attach(slot, ctx);
   }
-  // the page's previous player: kept only while it's playing (or in the corner); an idle one is closed,
-  // and its slot goes back to showing a play button
+  // the page's previous player: kept only while it's playing (or popped out); an idle one is closed
   const prev = currentDock;
   if (prev && prev !== d) {
-    if (prev.isPlaying() || prev.mode === 'float') prev.park(); else prev.destroy();
+    if (prev.isPlaying() || prev.mode === 'corner') prev.park(); else prev.destroy();
   }
   currentDock = d;
+  return d;
+}
+
+// Play a record's video in the corner player, with no page behind it (`vid` for YouTube, `medal` = { id, hash } for a Medal clip, `twitch` = { kind, id, time }). It is a window of its
+// own whatever the “when a video isn't on screen” setting is: the person asked for it. One such player at a time; it stays until it is closed.
+function miniPlay({ vid = null, medal = null, twitch = null, title = '' }) {
+  [...docks].forEach(d => { if (d.standalone || d.mode === 'corner') d.destroy(); });
+  [...docks].forEach(d => { if (d.isPlaying()) { d.command('pauseVideo'); d.paused = true; } }); // (a video on a level's page doesn't keep playing beside it)
+  const d = new VideoDock();
+  d.host = 'window'; d.standalone = true; d.title = title;
+  d.vid = medal ? 'medal:' + medal.id : twitch ? 'twitch:' + twitch.id : vid;
+  d.mode = 'corner'; d.auto = false; d.cornerSince = Date.now();
+  window.aredl.playerLoad({
+    id: d.id, kind: medal ? 'medal' : twitch ? 'twitch' : 'youtube', vid: (medal || twitch) ? undefined : vid, mid: medal ? medal.id : undefined, mhash: medal ? medal.hash : undefined,
+    tkind: twitch ? twitch.kind : undefined, tid: twitch ? twitch.id : undefined, ttime: twitch ? twitch.time : undefined,
+    standalone: true, time: 0, autoplay: true, title,
+    rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: [...document.body.classList].filter(c => c !== 'nav-editing').join(' '),
+  }).catch(() => {}).then(() => window.aredl.playerCorner({ id: d.id, instant: true, force: true }));
   return d;
 }
 
@@ -5167,15 +5265,6 @@ function redockIdleSlots() {
     dockPlay({ vid: slot.dataset.vid, slot, title: ctx.title, onReturn: ctx.onReturn });
   });
 }
-
-// A slot with no player (its video was closed or replaced): pressing play starts one again.
-document.addEventListener('click', (e) => {
-  const play = e.target.closest('.video-slot.idle .slot-play');
-  if (!play) return;
-  const slot = play.closest('.video-slot');
-  const ctx = slot._ctx || {};
-  dockPlay({ vid: slot.dataset.vid, slot, title: ctx.title || '', onReturn: ctx.onReturn || null, autoplay: true });
-});
 
 // Show a level's video (or a link if it can't be embedded) in the page's video zone.
 function playVideo(url, ctx = {}) {
@@ -5391,10 +5480,41 @@ function recordPlayerId(r) {
     || r.player_id || r.user_id || r.holder_id || r.profile_id || null;
 }
 
+// The play button of a record is the video site's own mark, in white (YouTube, Medal or Twitch), and grows a little under the pointer.
+const RECORD_ICONS = {
+  youtube: '<svg class="ico-yt" viewBox="0 0 28 20" aria-hidden="true"><path fill-rule="evenodd" d="M6 0h16a6 6 0 0 1 6 6v8a6 6 0 0 1-6 6H6a6 6 0 0 1-6-6V6a6 6 0 0 1 6-6zm5.2 5.6v8.8l7.4-4.4z"/></svg>',
+  medal: '<svg class="ico-medal" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20V5h3.6L12 12.4 17.4 5H21v15h-3.4v-9.2l-4.3 5.9h-2.6l-4.3-5.9V20z"/></svg>',
+  twitch: '<svg class="ico-twitch" viewBox="0 0 2400 2800" aria-hidden="true"><path d="M500,0L0,500v1800h600v500l500-500h400l900-900V0H500z M2200,1300l-400,400h-400l-350,350v-350H600V200h1600v1100z"/><rect x="1700" y="550" width="200" height="600"/><rect x="1150" y="550" width="200" height="600"/></svg>',
+};
+const RECORD_SITES = { youtube: 'YouTube', medal: 'Medal', twitch: 'Twitch' };
+// which site a record's video is on, and its link (YouTube first; a record has one video, so only one of them is ever found)
+function recordVideo(r) {
+  const yt = findYoutubeUrl(r); if (yt) return { kind: 'youtube', url: yt };
+  const md = findMedalUrl(r); if (md) return { kind: 'medal', url: md };
+  const tw = findTwitchUrl(r); if (tw) return { kind: 'twitch', url: tw };
+  return null;
+}
+// the play button of a record: a menu with the two ways to watch it
+function recordVideoMenu(btn, r) {
+  const v = recordVideo(r);
+  if (!v) return;
+  let play = null;
+  if (v.kind === 'youtube') { const vid = youtubeThumbId(v.url); if (vid) play = { vid }; }
+  else if (v.kind === 'medal') { const medal = medalParts(v.url); if (medal) play = { medal }; }
+  else { const twitch = twitchParts(v.url); if (twitch) play = { twitch }; }
+  const rc = btn.getBoundingClientRect();
+  showContextMenu(rc.left, rc.bottom + 4, [
+    { label: 'Open in browser', onClick: () => window.open(v.url, '_blank', 'noopener,noreferrer') },
+    { label: 'Play in miniplayer', disabled: !play, onClick: () => miniPlay({ ...play, title: recordName(r) }) },
+  ]);
+}
+
 $('#recordsList').addEventListener('click', (e) => {
   const row = e.target.closest('.record-row');
   if (!row) return;
   const r = recordsFiltered[Number(row.dataset.recordIdx)];
+  const playBtn = e.target.closest('.record-play[data-rec-video]');
+  if (playBtn) { e.stopPropagation(); if (r) recordVideoMenu(playBtn, r); return; }
   const id = r && recordPlayerId(r);
   if (!id) return;
   showTab('profile');
@@ -5505,7 +5625,7 @@ function renderRecordsPage() {
         const countryRaw = recordCountry(r);
         const flagDisplay = countryFlagHtml(countryRaw, 18);
         const date = recordDate(r);
-        const video = findYoutubeUrl(r);
+        const video = recordVideo(r);
         return `<div class="record-row" data-record-idx="${start + i}">
           <span class="record-flag">${flagDisplay}</span>
           <div class="record-main">
@@ -5513,8 +5633,8 @@ function renderRecordsPage() {
             ${date ? `<div class="record-date">${escapeHtml(new Date(date).toLocaleDateString())}</div>` : ''}
           </div>
           ${video
-            ? `<a class="record-play" href="${escapeHtml(video)}" target="_blank" rel="noopener" title="Watch on YouTube" onclick="event.stopPropagation()">▶</a>`
-            : `<span class="record-play" style="opacity:.3;">▶</span>`}
+            ? `<button class=\"record-play rp\" type=\"button\" data-rec-video=\"${video.kind}\" data-tip=\"Watch on ${RECORD_SITES[video.kind]}\" aria-label=\"Watch on ${RECORD_SITES[video.kind]}\">${RECORD_ICONS[video.kind]}</button>`
+            : `<span class=\"record-play\" style=\"opacity:.3;\">▶</span>`}
         </div>`;
       }).join('')
     : (recState && recState.loading

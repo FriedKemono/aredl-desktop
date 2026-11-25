@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>AREDL Desktop</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -585,7 +586,7 @@
         <h3>Idle screen</h3>
         <div class="setting-lines">
           <div class="setting-line">
-            <div class="setting-label"><strong>Idle screen</strong><small>After a while without use, level thumbnails from YouTube fade in one after another, slowly drifting. Any movement, click or key press brings the app straight back as it was.</small></div>
+            <div class="setting-label"><strong>Idle screen</strong><small>After a while without use, level thumbnails from YouTube fade in one after another, slowly drifting. Pressing any key or mouse button brings the app straight back as it was.</small></div>
             <div class="color-wrap">
               <label class="checkbox-wrap"><input type="checkbox" id="idleOnToggle"> Show when idle</label>
               <button class="btn btn-ghost small-btn" id="idlePreviewBtn" type="button">Preview</button>
@@ -901,13 +902,13 @@
         <div class="pl-field"><label class="pl-label" for="plId">Level ID</label><input class="pl-input" id="plId" type="text" inputmode="numeric"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoId" checked> Auto</label></div>
         <div class="pl-field"><label class="pl-label" for="plPlacement">AREDL placement</label><input class="pl-input" id="plPlacement" type="text" placeholder="Top 483"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoPlacement" checked> Auto</label></div>
         <div class="pl-field"><label class="pl-label" for="plTier">Tier (GDDL)</label><input class="pl-input" id="plTier" type="text" inputmode="decimal"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoTier" checked> Auto</label></div>
+        <div class="pl-field"><label class="pl-label" for="plDifficulty">Difficulty</label><select id="plDifficulty"><option value="">—</option><option value="Bizarre Demon" data-color="#a63a1b">Bizarre Demon</option><option value="Brutal Demon" data-color="#9a3216">Brutal Demon</option><option value="Extreme Demon" data-color="#8e2d13">Extreme Demon</option><option value="Radical Demon" data-color="#832810">Radical Demon</option><option value="Supreme Demon" data-color="#78230d">Supreme Demon</option><option value="Ultimate Demon" data-color="#6a1f0b">Ultimate Demon</option><option value="Horrendous Demon" data-color="#5b1a09">Horrendous Demon</option><option value="Inhumane Demon" data-color="#4b0e10">Inhumane Demon</option><option value="Slaughter Demon" data-color="#3f0f24">Slaughter Demon</option><option value="Apocalyptic Demon" data-color="#35113f">Apocalyptic Demon</option><option value="Divine Demon" data-color="#2a0f4a">Divine Demon</option><option value="Silent Demon" data-color="#1b0a30">Silent Demon</option><option value="Infinite Demon" data-color="#000000">Infinite Demon</option></select><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoDifficulty" checked> Auto</label></div>
         <div class="pl-field"><label class="pl-label" for="plPoints">List points</label><input class="pl-input" id="plPoints" type="text" inputmode="decimal"><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoPoints" checked> Auto</label></div>
       </div>
 
       <h4>Your run</h4>
       <div class="pl-fields">
         <div class="pl-field"><label class="pl-label" for="plPercent">Progress (%)</label><input class="pl-input" id="plPercent" type="text" inputmode="numeric" value="100" placeholder="100 or 53-79" autocomplete="off"><span class="pl-hint">A % or a run like 53-79. Anything under 100, or with a start (like 20-100), goes in Runs</span></div>
-        <div class="pl-field"><label class="pl-label" for="plDifficulty">Difficulty</label><select id="plDifficulty"><option value="">—</option><option value="Bizarre Demon" data-color="#a63a1b">Bizarre Demon</option><option value="Brutal Demon" data-color="#9a3216">Brutal Demon</option><option value="Extreme Demon" data-color="#8e2d13">Extreme Demon</option><option value="Radical Demon" data-color="#832810">Radical Demon</option><option value="Supreme Demon" data-color="#78230d">Supreme Demon</option><option value="Ultimate Demon" data-color="#6a1f0b">Ultimate Demon</option><option value="Horrendous Demon" data-color="#5b1a09">Horrendous Demon</option><option value="Inhumane Demon" data-color="#4b0e10">Inhumane Demon</option><option value="Slaughter Demon" data-color="#3f0f24">Slaughter Demon</option><option value="Apocalyptic Demon" data-color="#35113f">Apocalyptic Demon</option><option value="Divine Demon" data-color="#2a0f4a">Divine Demon</option><option value="Silent Demon" data-color="#1b0a30">Silent Demon</option><option value="Infinite Demon" data-color="#000000">Infinite Demon</option></select></div>
         <div class="pl-field"><label class="pl-label" for="plAttempts">Attempts</label><input class="pl-input" id="plAttempts" type="number" min="0" step="1" placeholder="15420"></div>
         <div class="pl-field"><label class="pl-label" for="plVersion">Version</label><input class="pl-input" id="plVersion" type="text" placeholder="2.2081"></div>
         <div class="pl-field"><label class="pl-label" for="plPhysics">Physics</label><div class="pl-suffix-wrap"><input class="pl-input" id="plPhysics" type="text" placeholder="follows Version"><span class="pl-suffix">Phys</span></div><label class="checkbox-wrap pl-auto"><input type="checkbox" id="plAutoPhysics" checked> Auto</label></div>
@@ -935,7 +936,7 @@
 </div>
 
 <template id="dockTemplate"><div class="video-dock off">
-  <iframe title="Video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+  <iframe title="Video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture" allowfullscreen></iframe>
 </div>
 </template>
 
