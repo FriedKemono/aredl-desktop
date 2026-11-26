@@ -132,6 +132,7 @@
       img.src = url;
     });
   }
+  window.attachLevelPictures = attachLevelPictures; // also used by the list of the levels the idle screen showed
   function findPack(tiers, packId) {
     for (const t of tiers) for (const p of (t.packs || [])) if (String(p.id) === String(packId)) return { pack: p, tier: t };
     return null;
@@ -139,7 +140,6 @@
   window.openPack = async function (packId, mode) {
     mode = mode || tabModes.packs || 'classic';
     const m = fx.openModal({ title: 'Pack', wide: true });
-    const packOverlay = m.box.closest('.fx-overlay'); if (packOverlay) packOverlay.classList.add('keeps-video'); // a video playing on the page behind carries on where it is (dimmed)
     m.body.innerHTML = '<div class="state">Loading the pack…</div>';
     try {
       let tiers = await ensureTiers(mode);

@@ -26,7 +26,7 @@
   .video-dock.mini.docked { box-shadow: none !important; border: 0 !important; border-radius: 10px; }
   .video-dock.mini.docked .mp-clip { border-radius: 10px; clip-path: inset(0 round 10px); }
   .video-dock.mini.docked .mp-bar, .video-dock.mini.docked .mp-resize { display: none !important; }
-  body.standalone .mp-btn[data-mp="return"] { display: none; }
+  body.no-return .mp-btn[data-mp="return"] { display: none; }
 </style>
 </head>
 <body>
@@ -36,6 +36,7 @@
     <span class="mp-grip" aria-hidden="true"></span>
     <span class="mp-title"></span>
     <button class="mp-btn" data-mp="return" title="Back to the level" aria-label="Back to the level"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5L3.5 9.5 8 14"/><path d="M3.5 9.5H12a4.5 4.5 0 0 1 4.5 4.5v1"/></svg></button>
+    <button class="mp-btn" data-mp="hide" title="Close the player, keep playing (sound only)" aria-label="Close the player, keep playing"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 14h10"/></svg></button>
     <button class="mp-btn" data-mp="close" title="Close player" aria-label="Close player"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M5 5l10 10M15 5L5 15"/></svg></button>
   </div>
   <div class="mp-resize" data-edge="tl"></div>

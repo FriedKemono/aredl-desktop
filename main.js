@@ -72,7 +72,7 @@ const ENDPOINTS = {
   levelDetail: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}`, // confirmed by user
   levelCreators: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/creators`, // confirmed by user
   levelHistory: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/history`, // confirmed by user
-  levelRecords: (levelId, page, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/records?page=${page}`, // confirmed endpoint, page param follows the same convention as changelog
+  levelRecords: (levelId, page, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/records?page=${page}&per_page=100`, // confirmed endpoint; 100 per page means fewer requests (the page shows 50 at a time either way)
   submissions: (mode) => `${API_BASE}/${apiPrefix(mode)}/submissions/@me`, // confirmed by user
   submissionQueue: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/submissions/${id}/queue`, // confirmed by user
   notifications: `${API_BASE}/users/@me/notifications`, // one feed for the account, not per list
@@ -80,6 +80,7 @@ const ENDPOINTS = {
   changelog: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/changelog?page=${page}`,
   packTiers: (mode) => `${API_BASE}/${apiPrefix(mode)}/pack-tiers`,
   levelPacks: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/packs`,
+  customCopies: (levelId, mode) => `${API_BASE}/${apiPrefix(mode)}/levels/${levelId}/custom-copies`, // one level's custom copies (confirmed)
   leaderboard: (page, mode, per = 50) => `${API_BASE}/${apiPrefix(mode)}/leaderboard?page=${page}&per_page=${per}`,
   countries: (page, mode) => `${API_BASE}/${apiPrefix(mode)}/leaderboard/countries?page=${page}&per_page=50`,
   country: (id, mode) => `${API_BASE}/${apiPrefix(mode)}/country/${encodeURIComponent(id)}`,
@@ -197,6 +198,14 @@ function logRequest(entry) {
   if (mainWindow) mainWindow.webContents.send('requestLog:new', entry);
 }
 
+// What a response says about its own rate limit (when the server sends it): the limit, what is left, and how long to wait after a 429.
+function rateInfo(res) {
+  const h = res && res.headers;
+  if (!h || typeof h.get !== 'function') return {};
+  const n = (k) => { const v = h.get(k); return v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined; };
+  return { rlLimit: n('x-ratelimit-limit'), rlRemaining: n('x-ratelimit-remaining'), retryAfter: n('retry-after') };
+}
+
 // Turns an error response into just the human-readable reason (e.g. "You are
 // being rate limited") instead of dumping the status, URL and raw JSON.
 function reasonFromErrorBody(text, status) {
@@ -232,14 +241,14 @@ async function apiFetch(url, { requireAuth = false } = {}) {
   if (err || !res.ok) {
     const text = res ? await res.text().catch(() => '') : '';
     const status = res ? res.status : null;
-    logRequest({ url, status, ok: false, timestamp: startedAt, error: err ? err.message : text.slice(0, 200) });
+    logRequest({ url, status, ok: false, timestamp: startedAt, error: err ? err.message : text.slice(0, 200), ...rateInfo(res) });
     if (err) throw err;
     const e = new Error(reasonFromErrorBody(text, status));
     e.status = status;
     throw e;
   }
 
-  logRequest({ url, status: res.status, ok: true, timestamp: startedAt });
+  logRequest({ url, status: res.status, ok: true, timestamp: startedAt, ...rateInfo(res) });
   return res.json();
 }
 
@@ -493,6 +502,9 @@ function createWindow() {
   mainWindow.on('close', (e) => {
     if (!app.isQuiting) {
       e.preventDefault();
+      // closing the app's window (the X) also closes the videos: every player window goes, and the page is told so nothing keeps playing in it either
+      pDestroyAll();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('win:closed');
       mainWindow.hide();
     }
   });
@@ -582,7 +594,7 @@ async function miscFetch(url, options, what) {
   try { res = await fetch(url, options); }
   catch (err) { logRequest({ kind: 'misc', what, url, status: null, ok: false, timestamp: startedAt, error: err.message }); throw err; }
   const redirected = !!options && options.redirect === 'manual' && res.status >= 300 && res.status < 400; // a redirect that was asked to be looked at, not followed
-  logRequest({ kind: 'misc', what, url, status: res.status, ok: res.ok || res.status === 404 || redirected, timestamp: startedAt, error: res.ok || redirected ? undefined : `HTTP ${res.status}` });
+  logRequest({ kind: 'misc', what, url, status: res.status, ok: res.ok || res.status === 404 || redirected, timestamp: startedAt, error: res.ok || redirected ? undefined : `HTTP ${res.status}`, ...rateInfo(res) });
   return res;
 }
 async function fetchNewgroundsSong(id) {
@@ -1120,6 +1132,33 @@ ipcMain.handle('api:getChangelog', async (_e, page, mode) => apiFetch(ENDPOINTS.
 
 ipcMain.handle('api:getPackTiers', async (_e, mode) => apiFetch(ENDPOINTS.packTiers(mode)));
 ipcMain.handle('api:getLevelPacks', async (_e, levelId, mode) => apiFetch(ENDPOINTS.levelPacks(encodeURIComponent(levelId), mode)));
+ipcMain.handle('api:getCustomCopies', async (_e, levelId, mode) => {
+  const id = String(levelId == null ? '' : levelId);
+  if (!/^[\w-]{1,64}$/.test(id)) throw new Error('Invalid level');
+  return apiFetch(ENDPOINTS.customCopies(encodeURIComponent(id), mode));
+});
+
+// The "Find video" button on a video that can't be shown here: the first video results (up to 10) of YouTube's own search page for the text (no account
+// or key needed). Returns their ids, best match first.
+ipcMain.handle('yt:search', async (e, query) => {
+  if (!fromApp(e)) return { ids: [] };
+  const q = String(query || '').trim().slice(0, 150);
+  if (!q) return { ids: [] };
+  const res = await miscFetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%3D%3D`, { // (sp: videos only; listed in Settings → Other requests)
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+      Cookie: 'CONSENT=YES+cb; SOCS=CAI', // (so the cookie notice page doesn't come instead of the results)
+    },
+  }, `Searched YouTube for “${q}”`);
+  if (!res.ok) throw new Error(`YouTube search failed (${res.status})`);
+  const html = await res.text();
+  const ids = [];
+  const re = /"videoRenderer":\{"videoId":"([\w-]{11})"/g;
+  let m;
+  while ((m = re.exec(html)) && ids.length < 10) if (!ids.includes(m[1])) ids.push(m[1]);
+  return { ids };
+});
 ipcMain.handle('api:getLeaderboard', async (_e, page, mode, per) => apiFetch(ENDPOINTS.leaderboard(page || 1, mode, [50, 100].includes(Number(per)) ? Number(per) : 50)));
 ipcMain.handle('api:getCountries', async (_e, page, mode) => apiFetch(ENDPOINTS.countries(page || 1, mode)));
 ipcMain.handle('api:getCountry', async (_e, id, mode) => apiFetch(ENDPOINTS.country(id, mode)));
@@ -1670,7 +1709,7 @@ ipcMain.handle('player:load', async (e, o) => {
       : `https://player.twitch.tv/?video=v${o.tid}&parent=127.0.0.1&autoplay=${ap}&muted=false${ttime ? '&time=' + ttime : ''}`)
     : '';
   const load = {
-    kind, standalone: o.standalone === true, url,
+    kind, standalone: o.standalone === true, canReturn: o.canReturn === true, url,
     vid: kind === 'medal' ? o.mid : kind === 'twitch' ? o.tid : o.vid, time: Math.max(0, Number(o.time) || 0), autoplay: o.autoplay === true, title: String(o.title || '').slice(0, 300), pad: MINI_PAD,
     rootCss: String(o.rootCss || '').slice(0, 20000), bodyCss: String(o.bodyCss || '').slice(0, 20000), bodyClass: String(o.bodyClass || '').slice(0, 2000),
   };
@@ -1767,6 +1806,8 @@ ipcMain.on('mini:gestureEnd', (e) => {
   if (at.x !== b.x + MINI_PAD || at.y !== b.y + MINI_PAD || b.width !== w + MINI_PAD * 2) P.win.setBounds({ x: at.x - MINI_PAD, y: at.y - MINI_PAD, width: w + MINI_PAD * 2, height: h + MINI_PAD * 2 });
   saveMiniPrefs({ width: w, sx: at.x, sy: at.y });
 });
+// "Close the player, keep playing": the window goes out of sight and the video carries on (sound only); the app decides how it comes back
+ipcMain.on('mini:hide-keep', (e) => { const P = playerOf(e); if (P) toApp('player:hide', { id: P.id }); });
 ipcMain.on('mini:close-self', (e) => { const P = playerOf(e); if (!P) return; const id = P.id; pDestroy(P); toApp('player:closed', { id }); });
 // "Back to the level": the app opens the video's page, and the player docks over its video there
 ipcMain.on('mini:return', (e) => {

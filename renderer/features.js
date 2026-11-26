@@ -351,7 +351,7 @@
         if (node.matches('.api-logs .settings-card, .settings-card') && node.querySelector('.setting-line')) return;
         const label = (node.querySelector('.setting-label strong, h3') || {}).textContent || 'Setting', card = node.closest('.settings-card'), cname = card && card.querySelector('h3') ? card.querySelector('h3').textContent : '';
         const text = `${label} ${node.textContent}`;
-        if (norm(text).includes(q) && ok()) add('Setting', label.trim(), text, () => { showTab('settings'); setTimeout(() => { node.scrollIntoView({ block: 'center' }); node.classList.add('fx-flash'); setTimeout(() => node.classList.remove('fx-flash'), 1800); }, 250); }, 28, `set:${cname}:${label}`, `Opens this setting · Settings${cname ? ' › ' + cname.trim() : ''}`);
+        if (norm(text).includes(q) && ok()) add('Setting', label.trim(), text, () => { showTab('settings'); if (node.closest('.adv-only') && appSettings.showAdvanced !== true) showAdvancedSettings(true); setTimeout(() => { node.scrollIntoView({ block: 'center' }); node.classList.add('fx-flash'); setTimeout(() => node.classList.remove('fx-flash'), 1800); }, 250); }, 28, `set:${cname}:${label}`, `Opens this setting · Settings${cname ? ' › ' + cname.trim() : ''}`);
       });
     } catch { /* settings not drawn */ }
     try { let ok = cap(25); (typeof submissionsData !== 'undefined' ? submissionsData : []).forEach(it => { const text = flat(it); if (norm(text).includes(q) && ok()) add('Submission', subLevelName(it) || 'A level', text, () => { showTab('submissions'); const id = subLevelId(it); if (id != null) jumpToSubmission(id); }, 32, `sub:${subKey(it)}`, `Opens this submission in Submissions${it && it.status ? ' · ' + String(it.status) : ''}`); }); } catch { /* none */ }
@@ -1481,6 +1481,22 @@
   offer.className = 'idle-offer'; offer.hidden = true;
   document.body.appendChild(offer);
   let offerTimer = 0;
+  const shown = [];            // the levels that were put on screen, newest first (at most 10, each once)
+  // a list in the same style as a pack's window: one row per level, with AREDL's picture behind it; clicking a row goes to that level
+  function openLastShown() {
+    const rows = shown.map(l => {
+      const rank = l.position != null ? `#${l.position}` : (l.status || 'Legacy');
+      return `<div class="completed-banner pack-level" data-jump="${escapeHtml(l.level_id)}" data-pack-level="${escapeHtml(l.level_id)}">
+        <span class="c-rank">${escapeHtml(rank)}</span>
+        <div class="c-main"><div class="c-name">${escapeHtml(l.name)}</div><div class="c-meta">${formatPoints(l.points)} points</div></div>
+      </div>`;
+    }).join('');
+    const m = fx.openModal({ title: 'Last 10 shown', wide: true });
+    m.body.innerHTML = `<div class="pack-view-top"><span class="pack-view-stat"><strong>${shown.length}</strong> ${shown.length === 1 ? 'level' : 'levels'}, newest first</span></div>
+      <div class="pack-level-list">${rows || '<div class="dim">Nothing has been shown yet.</div>'}</div>`;
+    if (typeof attachLevelPictures === 'function') attachLevelPictures(m.body);
+    m.body.addEventListener('click', (e) => { if (e.target.closest('[data-jump]')) m.close(); }); // the page navigates (its own handler); the window closes
+  }
   const hideOffer = () => { clearTimeout(offerTimer); offer.hidden = true; };
   function showOffer(level) {
     if (!level) return;
@@ -1491,7 +1507,11 @@
     btn.className = 'btn'; btn.textContent = 'View';
     btn.title = 'Ctrl+click adds it to multi-select instead';
     btn.addEventListener('click', (ev) => { hideOffer(); if (ev.ctrlKey || ev.metaKey) addToLevelRange(level.level_id); else jumpToLevel(level.level_id, modeOfLevel(level)); });
-    offer.append(msg, btn);
+    const lastBtn = document.createElement('button');
+    lastBtn.className = 'btn btn-ghost'; lastBtn.textContent = 'View last 10';
+    lastBtn.title = 'The levels that were on screen, newest first';
+    lastBtn.addEventListener('click', () => { hideOffer(); openLastShown(); });
+    offer.append(msg, btn, lastBtn);
     offer.hidden = false;
     clearTimeout(offerTimer);
     offerTimer = setTimeout(() => { if (!offer.matches(':hover')) hideOffer(); }, 9000);
@@ -1562,6 +1582,9 @@
   const rnd = (a, b) => a + Math.random() * (b - a);
   function caption(i, level) {
     levelOf[i] = level;
+    const at = shown.findIndex(x => String(x.level_id) === String(level.level_id));
+    if (at !== -1) shown.splice(at, 1);
+    shown.unshift(level); if (shown.length > 10) shown.pop();
     caps[i].textContent = level.name || '';
     if (level.position != null) { const p = document.createElement('small'); p.textContent = `#${level.position}`; caps[i].append(p); }
   }

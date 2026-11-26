@@ -32,6 +32,7 @@ Timers (Settings → Sync): the save timer runs only when something changed loca
 Base `https://api.aredl.net/v2/api/`, prefix `aredl` (Classic) or `arepl` (Platformer) — use `apiPrefix(mode)`. Endpoints are built in `ENDPOINTS` in `main.js`. Level ids in paths can be the internal id, the game level id, or the position; two-player versions use `_2p` after the game id.
 
 - `pack-tiers`: tiers (`id, name, color, placement`) each with `packs` (`id, name, points, levels[]`); levels carry `level_id`, `two_player`, `position`, `points`, `status`, `completed_by_user`.
+- `levels/{id}/records?page=N&per_page=100`: a level's records, 100 per request. The Records list loads up to 50 requests (5,000 records) on its own and shows 50 per page; a button loads the next 50 requests.
 - `levels/{id}/packs`: `[{ id, name, tier: { id, name, color } }]`.
 - Mutual victors (`records/mutual-victors`) is staff-only; not used.
 

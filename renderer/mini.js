@@ -17,7 +17,8 @@
     dock.querySelector('.mp-title').textContent = d.title || '';
     PAD = Number(d.pad) || 48;
     vid = d.vid; lastState = null; lastTimeSent = 0;
-    document.body.classList.toggle('standalone', !!d.standalone); // opened from a record, no page behind it: no “Back to the level”
+    document.body.classList.toggle('standalone', !!d.standalone);
+    document.body.classList.toggle('no-return', !!d.standalone && !d.canReturn); // a player with no page to go back to has no “Back to the level”
     dock.style.setProperty('--poster', d.kind && d.kind !== 'youtube' ? 'none' : `url(https://img.youtube.com/vi/${encodeURIComponent(vid)}/hqdefault.jpg)`);
     initArgs = d; host = 'www.youtube.com'; triedNoCookie = false;
     load();
@@ -55,6 +56,7 @@
 
   dock.querySelector('[data-mp="close"]').addEventListener('click', () => api.close());
   dock.querySelector('[data-mp="return"]').addEventListener('click', () => api.returnToApp());
+  dock.querySelector('[data-mp="hide"]').addEventListener('click', () => api.hideKeep());
 
   // Moving and resizing (popped out): the pointer going down and up is reported; between the two the main process moves the window with the cursor.
   let active = null;

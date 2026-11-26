@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('aredlMini', {
   state: (st) => ipcRenderer.send('mini:state', st),
   close: () => ipcRenderer.send('mini:close-self'),
   returnToApp: () => ipcRenderer.send('mini:return'),
+  hideKeep: () => ipcRenderer.send('mini:hide-keep'),
   gesture: (g) => ipcRenderer.send('mini:gesture', g),
   gestureEnd: () => ipcRenderer.send('mini:gestureEnd'),
   ready: () => ipcRenderer.send('mini:ready'),

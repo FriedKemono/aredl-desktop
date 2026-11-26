@@ -4,8 +4,28 @@
 // release a version that has no entry.) This one list feeds the in-app "What's new" window, the notes
 // on each GitHub release, and the "update ready" prompt.
 // Each item is [type, text] where type is 'new', 'improved' or 'fixed'.
+// A 'fixed' item is only written for a fix to something from an earlier version. A bug in something that is new in the same version is fixed without an entry.
 // ---------------------------------------------------------------------------
 const APP_RELEASES = [
+  {
+    version: '1.2.0',
+    date: '26-11-2026',
+    title: 'Level difficulty, custom copies, Find Video and Popout',
+    items: [
+      ['new', 'A level’s info shows its Difficulty beside the GDDL tier, also in multi-select. An eye icon opens a window listing every difficulty and its tiers, with the level’s own on top. The tier is rounded to the nearest whole number; only the #1 of the classic list is an Infinite Demon.', 'Level difficulty'],
+      ['new', 'A level with custom copies (LDMs, bugfixes, …) shows a “View custom copies” button under its Level ID. It lists each copy’s type, ID, status and description, with a raw API response box. One request per level; multi-select loads only on click.', 'Custom copies'],
+      ['new', 'Two buttons sit beside the top-right corner of a level’s video (above it when the panel is narrow). Find Video searches YouTube for the level’s name plus “gd” and plays the first of up to 10 results that works, in the miniplayer. Popout moves the playing video to the corner player.', 'Find Video and Popout'],
+      ['new', 'The miniplayer has a button that closes it while the video keeps playing (sound only). A miniplayer opened for a record or a found video also has “Back to the level”.', 'Miniplayer buttons'],
+      ['new', 'The Advanced section of Settings has a Show advanced settings switch. The developer options and the request log stay hidden until it is on. It is off by default.', 'Advanced settings switch'],
+      ['improved', 'Closing the app’s window with the X also closes every video and the miniplayer. Minimising still leaves a playing video in the corner.', 'Closing the app closes videos'],
+      ['improved', 'A level’s info is always two rows of the same height, evenly divided, also in multi-select: Level ID, List Points and Edel Enjoyment on top; Song, NLW Tier, GDDL Tier and Difficulty below. A box with no value is left out and the others share its row. Song is always shown, its name on one line with the full name in a tooltip. Text grows to fill its box when there is room, so it differs from level to level.', 'Level info boxes'],
+      ['improved', 'The idle screen’s popup has a “View last 10” button. It lists the last 10 levels that were on screen, newest first.', 'Last 10 shown'],
+      ['improved', 'The request log names the level in level, song and picture lines. Separate by place splits the figures by service. A Rate limits block lists each place with its published limit (Google Drive, GitHub) and the app’s current rate. A place that answers 429 gets the number of requests that went through as its limit, in orange, kept until “Clear found limits” is clicked or a later 429 changes it. Without a found limit it shows “>” the most requests in a minute so far, or a dash.', 'Request log'],
+      ['improved', 'A level’s records are requested 100 per page, and up to 5,000 records load before the “Load more records” button appears. The Records list still shows 50 per page.', 'Faster records loading'],
+      ['fixed', 'A video playing on a level’s page showed through an open pack window. It now steps aside while a pack is open and keeps playing.', 'Video over packs'],
+      ['improved', 'In the personal list, Auto difficulty counts Tier 20 as a Bizarre Demon (Tiers 20–21), and only the #1 of the classic list is an Infinite Demon.', 'Auto difficulty ranges'],
+    ],
+  },
   {
     version: '1.1.9',
     date: '23-11-2026',
@@ -56,7 +76,6 @@ const APP_RELEASES = [
       ['fixed', 'In Records, the page number box was large enough to squeeze the “/ total” text. The box is smaller, and the pager keeps its text on one line and wraps when the column is narrow.', 'Records page box'],
       ['improved', 'The YouTube logo on a profile’s completed levels uses the accent colour.', 'Accent YouTube logo'],
       ['improved', 'An expanded submission shows a Details block in the same divided style as a level’s info: the level (position and points), submitter with country, status, platform, mod menu, priority, lock state, custom copy ID, reviewer, raw footage link, and submitted and last changed dates. The submitter’s and reviewer’s notes are joined to it at full width. Fields the submission does not have are left out.', 'Submission details'],
-      ['fixed', 'The Details block of an expanded submission was drawn as a pill with misplaced dividers and a broken top line. It is now a rectangle with small corners and even dividers on every row, and its title sits closer to it.', 'Submission details layout'],
       ['fixed', 'A video leaving its page could vanish and not appear in the corner player: it was hidden at once, while the corner player still showed only a picture until its video played. The video now stays on screen where it was until the corner player plays it, the corner player only appears once its video plays, and if it never does the video stays where it was.', 'Corner player hand-over'],
       ['improved', 'The corner player pops out faster. While a video plays, a hidden corner player with the same video already loaded is kept ready, so handing the video over only has to go to the same moment and play. It is removed when nothing plays any more.', 'Faster pop-out'],
       ['improved', 'The corner player’s glide to and from the video moves the player with a graphics-card transform instead of resizing the window on every frame, which makes it smooth.', 'Smoother glide'],
@@ -115,7 +134,6 @@ const APP_RELEASES = [
       ['new', 'The tour has steps for Saved filters, Pick a level, the command palette and Packs. The command palette step opens the palette.', 'Tour steps'],
       ['new', 'The menu button for extra tabs also works with the tabs in the side bar. It sits above Settings, and a tab is moved into or out of it by right-clicking the tab.', 'Side bar menu'],
       ['new', 'While reordering tabs, the logo and name and the “logged in” text each have a small toggle. The toggles are only shown while reordering.', 'Title bar toggles'],
-      ['fixed', 'The title bar toggles for the logo and name and for “logged in” were visible all the time and larger than other toggles. They are smaller and only appear while reordering tabs.', 'Title bar toggle size'],
       ['new', 'With Show raw API responses on, the leaderboard, the Packs tab, a pack, and a level’s packs have a full API response box.', 'More API responses'],
       ['new', 'Settings → Display → Pictures in the Demon List shows AREDL’s picture of each level behind its row. Only the rows on screen load a picture.', 'List pictures'],
       ['new', 'The Sync card shows a live countdown to the next save and the next check, and whether changes are waiting to be saved.', 'Sync timers'],
@@ -129,7 +147,6 @@ const APP_RELEASES = [
       ['improved', 'The pack buttons use the same translucent look as the other small buttons, including in the glass themes.', 'Pack buttons'],
       ['improved', 'No tooltip appears while a tab is being dragged, and the side bar menu opens above the page.', 'Tab and menu details'],
       ['fixed', 'Google Drive sign-in on a computer that had a client ID and secret saved from an older version failed with “The provided client secret is invalid”. The client built into the app is now always used, and a leftover saved client is removed.', 'Drive sign-in fix'],
-      ['fixed', 'Back to the level in the floating player did nothing. It now returns to the level at the same moment.', 'Floating player return'],
     ],
   },
   {
@@ -150,7 +167,6 @@ const APP_RELEASES = [
       ['new', 'The request log has two logs side by side: AREDL API requests and other requests (song name lookups), under one card with the combined figures.', 'Request logs'],
       ['new', 'The Song box in a level’s details has a Load name button when the name is not known yet, and fills in by itself when the name is found from the song button above.', 'Song name button'],
       ['new', 'Levels that use one of the game’s own songs (negative song IDs) show the song’s name and artist.', 'Game songs'],
-      ['fixed', 'The buttons beside a level’s name keep the pill’s rounded ends when hovered, in the glass themes too.', 'Tool pill hover'],
       ['improved', 'The buttons beside a level’s name are one pill with thin dividers.', 'Tool pill'],
       ['improved', 'Popups, including the command palette, fade and scale in and out. Dropdowns, cards, inputs and popups added in 1.1.0 and 1.1.1 now follow the glass look and colours of the rest of the app, and Settings cards are no longer near-black.', 'Popup motion'],
       ['improved', 'Export & import is much shorter: its options sit in a compact grid.', 'Export layout'],
@@ -158,7 +174,6 @@ const APP_RELEASES = [
       ['improved', 'Looking up all song names shows a clear busy state on Start and Stop, with an estimated time remaining.', 'Song lookups'],
       ['improved', 'Tiers always show two decimals unless they are whole numbers, and decimals caused by floating-point rounding are cleaned up. The app tour also highlights the Stats button on the personal list.', 'Tier decimals'],
       ['fixed', 'The personal list stats panel no longer stays on screen after switching back to the list.', 'Stats panel fix'],
-      ['fixed', 'Refreshing level info no longer triggers song name lookups.', 'Refresh fix'],
       ['improved', 'Wording across the app, settings and changelog is neutral.', 'Neutral wording'],
     ],
   },
@@ -190,7 +205,6 @@ const APP_RELEASES = [
       ['improved', 'Smoother scrolling: the Shader backdrop does its blurring while it draws instead of making your graphics card blur the whole window every frame, and the backdrop holds still while you are on Settings.', 'Smoother scrolling'],
       ['new', 'A Mac version. Every release now includes a .dmg installer for Mac (Apple Silicon and Intel), and the Mac app updates itself the same way the Windows installer does: it finds the new version, downloads it in the background and asks to restart. The Top bar setting works on Mac too, with the tabs in the title bar next to the red / yellow / green window buttons.', 'Mac version'],
       ['improved', 'The Shader backdrop now starts as a warm ember glow (deep rose to orange) instead of blue, until you look at a level and it takes that level’s colours.', 'Ember shader'],
-      ['fixed', 'Spotify searches no longer show stray “+-+” between the words: the song’s name and artist are tidied before searching.', 'Spotify fix'],
     ],
   },
   {

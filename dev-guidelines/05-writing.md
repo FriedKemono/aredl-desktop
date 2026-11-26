@@ -32,3 +32,4 @@ Every place the palette can send you needs a short label and a hint like this. R
 - **Title:** very short (1–4 words), shown in bold. No trailing full stop.
 - **Text:** what the feature is or what was wrong, stated plainly; one to three sentences. Dates are DD-MM-YYYY.
 - `new` = something that did not exist; `improved` = existing behaviour got better; `fixed` = something was broken.
+- **`fixed` entries only for earlier versions:** a `fixed` entry is written only when the fix is for a feature from a previous version. A bug in something that is new in the version being written is fixed without an entry, and the feature's own entry describes it as it ships. The same goes for a `new` or `improved` item that is reworked within the same version: rewrite that item instead of adding a second one.

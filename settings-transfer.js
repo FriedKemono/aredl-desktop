@@ -72,6 +72,20 @@ const SPEC = {
   dateDp:          { label: 'Date precision',          check: int(0, 2) },
   showRaw:         { label: 'Raw API responses',       check: bool },
   showSongNames:   { label: 'Show song names',         check: bool },
+  logByPlace:      { label: 'Separate request stats by place', check: bool },
+  showAdvanced:    { label: 'Advanced settings shown', check: bool },
+  rateLimitHits:   { label: 'Rate limits found by hitting them', check: (v) => {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+    const out = {};
+    Object.keys(v).slice(0, 40).forEach((id) => {
+      const h = v[id];
+      if (!/^[A-Za-z0-9._:-]{1,80}$/.test(id) || !h || typeof h !== 'object') return;
+      const count = Math.round(Number(h.count)), at = Math.round(Number(h.at));
+      if (!Number.isFinite(count) || count < 1 || count > 10000000 || !Number.isFinite(at) || at < 0) return;
+      out[id] = { count, unit: h.unit === 'hour' ? 'hour' : 'minute', at };
+    });
+    return out;
+  } },
   toolsExpanded:   { label: 'Level buttons unfolded',  check: bool },
   paletteKey:      { label: 'Command palette key',     check: (v) => (typeof v === 'string' && /^(?:(?:Mod|Alt|Shift)\+){0,3}\S{1,12}$/.test(v) ? v : undefined) }, // Mod = Ctrl on Windows, Cmd on a Mac
   // the top bar

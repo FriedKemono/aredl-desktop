@@ -798,16 +798,26 @@
       </div>
 
       <h3 class="settings-section">Advanced</h3>
-      <div class="settings-card">
+      <div class="settings-card wide">
+        <div class="setting-lines">
+          <div class="setting-line">
+            <div class="setting-label"><strong>Show advanced settings</strong><small>Shows the developer options and the request log. They stay hidden while this is off.</small></div>
+            <label class="checkbox-wrap"><input type="checkbox" id="showAdvanced"> Show advanced settings</label>
+          </div>
+        </div>
+      </div>
+      <div class="settings-card adv-only" hidden>
         <h3>Developer</h3>
         <label class="checkbox-wrap"><input type="checkbox" id="showRawToggle"> Show raw API responses (the "Full API response" blocks)</label>
       </div>
-      <div class="settings-card wide">
+      <div class="settings-card wide adv-only" hidden>
         <h3>Request log</h3>
-        <p class="dim">Every request this app makes, most recent first, with what it was for. The figures count both logs below together. Kept in memory only for this session.</p>
+        <p class="dim">Every request this app makes, most recent first, with what it was for. The figures count both logs below together, or one place at a time with the option below. Kept in memory only for this session.</p>
+        <label class="checkbox-wrap" style="margin:0 0 10px;"><input type="checkbox" id="logByPlace"> Separate by place</label>
         <div id="apiRate" class="api-rate"></div>
+        <div id="rateLimits" class="rate-limits"></div>
       </div>
-      <div class="api-logs">
+      <div class="api-logs adv-only" hidden>
         <div class="settings-card">
           <h3>AREDL API</h3>
           <p class="dim">Requests to api.aredl.net: <span id="apiLogCount">0 this session</span>.</p>

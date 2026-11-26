@@ -428,11 +428,23 @@ function applyRawVisibility() {
   document.body.classList.toggle('hide-debug-info', !show);
   $('#showRawToggle').checked = show;
 }
+$('#logByPlace').addEventListener('change', () => { setSetting('logByPlace', $('#logByPlace').checked); renderApiLog(); });
 $('#showRawToggle').addEventListener('change', () => {
   setSetting('showRaw', $('#showRawToggle').checked);
   applyRawVisibility();
 });
 applyRawVisibility();
+
+// Settings › Advanced: the developer options and the request log are shown only while this is on (off by default).
+function applyAdvancedVisibility() {
+  const show = appSettings.showAdvanced === true;
+  document.querySelectorAll('#tab-settings .adv-only').forEach(n => { n.hidden = !show; });
+  const t = document.getElementById('showAdvanced');
+  if (t) t.checked = show;
+}
+function showAdvancedSettings(on) { setSetting('showAdvanced', !!on); applyAdvancedVisibility(); }
+$('#showAdvanced').addEventListener('change', () => { showAdvancedSettings($('#showAdvanced').checked); });
+applyAdvancedVisibility();
 
 // ---------------------------------------------------------------------------
 // Themes (Settings > Visual). Each theme is a full set of the colour variables
@@ -1291,9 +1303,11 @@ async function initSettings() {
   try { customBg = await window.aredl.bgInfo(); } catch { /* no custom backdrop */ }
   if (customBg.on) setPageBackground(null); // a chosen backdrop shows from the start, before any level is opened
   applyRawVisibility();
+  applyAdvancedVisibility();
   $('#adaptiveTint').value = Number.isFinite(appSettings.adaptiveTint) ? appSettings.adaptiveTint : 30;
   $('#adaptiveMethod').value = appSettings.adaptiveMethod === 'vivid' ? 'vivid' : 'gamma';
   $('#videoLeaveSelect').value = appSettings.videoOnLeave || 'popup';
+  $('#logByPlace').checked = appSettings.logByPlace === true;
   $('#idleOnToggle').checked = appSettings.idleOn !== false;
   $('#idleSecsSelect').value = String(Math.max(30, Number(appSettings.idleSecs) || 120));
   setSelectDisabled($('#idleSecsSelect'), appSettings.idleOn === false);
@@ -1483,19 +1497,42 @@ setInterval(() => {
   if (tab && tab.classList.contains('active')) renderApiLog();
 }, 5000);
 
-// Plain-English reason for a request, worked out from its URL (using the already-loaded list for names).
+// Every level the app knows, from both lists (a log line can be about either).
+function allKnownLevels() {
+  const out = [];
+  ['classic', 'platformer'].forEach(m => { try { levelsOf(m).forEach(l => out.push(l)); } catch { /* list not loaded */ } });
+  return out;
+}
+// A level written in a URL (its game id, an internal id, or a game id with _2p) -> its name.
+function levelNameFromRef(ref) {
+  const raw = decodeURIComponent(String(ref));
+  const two = /_2p$/i.test(raw), id = raw.replace(/_2p$/i, '');
+  const l = allKnownLevels().find(x => String(x.level_id) === id || String(x.id) === id);
+  return l ? `${l.name}${two ? ' (2P)' : ''}` : `level ${id}`;
+}
+// A song id -> the levels that use it ("Level A", "Level A and Level B", "Level A and 3 more").
+function levelNamesForSong(songId) {
+  const names = [...new Set(allKnownLevels().filter(l => String(l.song) === String(songId)).map(l => l.name))];
+  if (!names.length) return '';
+  return names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names[0]} and ${names.length - 1} more`;
+}
+
+// Plain-English reason for a request, worked out from its URL (using the already-loaded lists for names).
 function describeRequest(url) {
   let u;
   try { u = new URL(url); } catch { return null; }
   const p = u.pathname.replace(/^\/v2\/api/, '').replace(/\/+$/, '');
   const q = u.searchParams;
-  const nameOf = (id) => { const l = state.levels.find(x => String(x.level_id) === String(id)); return l ? l.name : `level ${id}`; };
+  const nameOf = levelNameFromRef;
   const page = q.get('page') ? ` (page ${q.get('page')})` : '';
   let m;
   const list = /^\/arepl\//.test(p) ? 'platformer ' : '';
   if (/^\/(?:aredl|arepl)\/levels$/.test(p)) return `Loaded the ${list}level list`;
   if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/records$/))) return `Loaded ${nameOf(m[1])} records${page}`;
   if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/history$/))) return `Loaded ${nameOf(m[1])} position history`;
+  if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/custom-copies$/))) return `Loaded ${nameOf(m[1])} custom copies`;
+  if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/packs$/))) return `Loaded the packs ${nameOf(m[1])} is in`;
+  if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)\/creators$/))) return `Loaded ${nameOf(m[1])} creators`;
   if ((m = p.match(/^\/(?:aredl|arepl)\/levels\/([^/]+)$/))) return `Loaded ${nameOf(m[1])}`;
   if (/^\/(?:aredl|arepl)\/changelog$/.test(p)) return `Loaded the ${list}changelog${page}`;
   if (/^\/(?:aredl|arepl)\/leaderboard\/countries$/.test(p)) return `Loaded the ${list}countries leaderboard${page}`;
@@ -1509,10 +1546,56 @@ function describeRequest(url) {
   return `Loaded ${p || '/'}`;
 }
 
-// Plain-English reason for a request that isn't to the AREDL API (song lookups...).
+// Plain-English reason for a request that isn't to the AREDL API. One about a song says which level it is for, one about a level picture names the level.
 function describeMisc(e) {
-  if (e.what) return e.what;
-  try { return `Contacted ${new URL(e.url).hostname}`; } catch { return 'Request'; }
+  let text = e.what;
+  if (!text) { try { text = `Contacted ${new URL(e.url).hostname}`; } catch { return 'Request'; } }
+  let m;
+  if ((m = text.match(/song (\d+)/))) { const lv = levelNamesForSong(m[1]); if (lv) text = text.replace(`song ${m[1]}`, `song ${m[1]} (${lv})`); }
+  if (/^AREDL level picture/.test(text) && (m = String(e.url).match(/\/(?:levels|cards|full|thumbs?)\/([^/.?]+)\.[a-z]+/i))) {
+    const nm = levelNameFromRef(m[1]);
+    if (!/^level /.test(nm)) text = `AREDL level picture · ${nm}`;
+  }
+  return text;
+}
+
+// ---- Where each request goes, and what its service says about limits (only what the services publish; "Not published" otherwise) ----
+const LOG_PLACES = [
+  { id: 'aredl', name: 'AREDL API', hosts: ['api.aredl.net'], limit: null, note: 'Not published' },
+  { id: 'pics', name: 'Level pictures (GitHub)', hosts: ['raw.githubusercontent.com'], limit: null, note: 'Not published' },
+  { id: 'newgrounds', name: 'Newgrounds', hosts: ['www.newgrounds.com', 'newgrounds.com'], limit: null, note: 'Not published' },
+  { id: 'gd', name: 'Geometry Dash server', hosts: ['www.boomlings.com', 'boomlings.com'], limit: null, note: 'Not published' },
+  { id: 'youtube', name: 'YouTube search', hosts: ['www.youtube.com', 'youtube.com'], limit: null, note: 'Not published' },
+  { id: 'google', name: 'Google Drive sync', hosts: ['www.googleapis.com', 'oauth2.googleapis.com', 'accounts.google.com'], limit: { count: 12000, ms: 60000, unit: 'minute' }, note: '12,000 per minute' },
+  { id: 'github', name: 'GitHub (updates)', hosts: ['api.github.com', 'github.com'], limit: { count: 60, ms: 3600000, unit: 'hour', onlyHost: 'api.github.com' }, note: '60 per hour' },
+];
+function placeOf(e) {
+  let host = '';
+  try { host = new URL(e.url).hostname; } catch { /* no url */ }
+  return LOG_PLACES.find(p => p.hosts.includes(host)) || { id: `host:${host}`, name: host || 'Other', hosts: [host], limit: null, note: 'Not published' };
+}
+
+// When a place answers 429 (too many requests), the number of its requests that went through in that period (a minute, or the place's own published period) is kept as its limit.
+// It is saved (appSettings.rateLimitHits) until it is cleared, and replaced when a later 429 finds a higher or lower number.
+function rateHits() {
+  const h = appSettings.rateLimitHits;
+  return h && typeof h === 'object' && !Array.isArray(h) ? h : {};
+}
+function learnRateLimit(entry, all) {
+  if (!entry || entry.status !== 429) return;
+  const t = new Date(entry.timestamp).getTime();
+  if (!Number.isFinite(t)) return;
+  const p = placeOf(entry);
+  const prev = rateHits()[p.id];
+  if (prev && prev.at >= t) return; // this answer has been counted already
+  const win = p.limit ? p.limit.ms : 60000;
+  const hostOf = (e) => { try { return new URL(e.url).hostname; } catch { return ''; } };
+  const count = all.filter(e => e !== entry && e.status !== 429 && placeOf(e).id === p.id
+    && t - new Date(e.timestamp).getTime() >= 0 && t - new Date(e.timestamp).getTime() <= win
+    && (!p.limit || !p.limit.onlyHost || hostOf(e) === p.limit.onlyHost)).length;
+  if (count < 1) return; // nothing went through before it, so there is no number to keep
+  const next = Object.assign({}, rateHits(), { [p.id]: { count, unit: p.limit ? p.limit.unit : 'minute', at: t } });
+  setSetting('rateLimitHits', next);
 }
 
 function logRowHtml(e, reason) {
@@ -1530,15 +1613,34 @@ const failedCount = (list) => list.filter(e => !e.ok).length;
 function renderApiLog() {
   const now = Date.now();
   const ts = (e) => new Date(e.timestamp).getTime();
-  const all = apiLog.concat(miscLog); // the three figures on the top card count both logs together
-  const lastMin = all.filter(e => now - ts(e) <= 60000).length;
-  const last5 = all.filter(e => now - ts(e) <= 300000).length;
-  const limited = all.filter(e => e.status === 429).length;
+  const all = apiLog.concat(miscLog); // the figures on the top card count both logs together
   const rate = document.getElementById('apiRate');
-  if (rate) rate.innerHTML = `<span class="rate-pill strong">${lastMin} requests/min</span>
-    <span class="rate-pill">${(last5 / 5).toFixed(1)}/min avg (5 min)</span>
-    <span class="rate-pill">${all.length} this session</span>
-    ${limited ? `<span class="rate-pill warn">${limited} rate-limited (429)</span>` : ''}`;
+  const byPlace = appSettings.logByPlace === true;
+  const stat = (list) => ({
+    min: list.filter(e => now - ts(e) <= 60000).length,
+    avg5: list.filter(e => now - ts(e) <= 300000).length / 5,
+    total: list.length,
+    limited: list.filter(e => e.status === 429).length,
+  });
+  if (rate) {
+    if (!byPlace) {
+      const t = stat(all);
+      rate.innerHTML = `<span class="rate-pill strong">${t.min} requests/min</span>
+        <span class="rate-pill">${t.avg5.toFixed(1)}/min avg (5 min)</span>
+        <span class="rate-pill">${t.total} this session</span>
+        ${t.limited ? `<span class="rate-pill warn">${t.limited} rate-limited (429)</span>` : ''}`;
+    } else {
+      const groups = new Map();
+      all.forEach(e => { const p = placeOf(e); if (!groups.has(p.id)) groups.set(p.id, { place: p, list: [] }); groups.get(p.id).list.push(e); });
+      rate.innerHTML = groups.size ? [...groups.values()].sort((a, b) => b.list.length - a.list.length).map(({ place, list }) => {
+        const t = stat(list);
+        return `<div class="rate-place${t.limited ? ' warn' : ''}"><span class="rate-place-name">${escapeHtml(place.name)}</span>
+          <span class="rate-place-now"><b>${t.min}</b>/min</span>
+          <span class="rate-place-sub">${t.avg5.toFixed(1)}/min avg · ${t.total} this session${t.limited ? ` · ${t.limited} rate-limited` : ''}</span></div>`;
+      }).join('') : '<span class="dim">No requests yet.</span>';
+    }
+  }
+  renderRateLimits(all, now, ts);
   const sum = (list) => `${list.length} this session${failedCount(list) ? ` · ${failedCount(list)} failed` : ''}`;
   const capA = document.getElementById('apiLogCount'), capM = document.getElementById('miscLogCount');
   if (capA) capA.textContent = sum(apiLog);
@@ -1553,16 +1655,80 @@ function renderApiLog() {
     : '<div class="dim">Nothing yet. Song name lookups and AREDL level pictures show up here.</div>';
 }
 
+// The note under the figures: each place the app contacts, the limit its service publishes (or the one found by hitting it), and this app's current rate against it.
+// The most requests to one place that went through (no 429) inside any 60 seconds so far this session.
+function peakPerMinute(list, ts) {
+  const times = list.filter(e => e.status !== 429).map(ts).filter(Number.isFinite).sort((a, b) => a - b);
+  let best = 0, lo = 0;
+  for (let i = 0; i < times.length; i++) { while (times[i] - times[lo] > 60000) lo++; best = Math.max(best, i - lo + 1); }
+  return best;
+}
+function renderRateLimits(all, now, ts) {
+  const box = document.getElementById('rateLimits');
+  if (!box) return;
+  const places = LOG_PLACES.slice();
+  all.forEach(e => { const p = placeOf(e); if (!places.some(x => x.id === p.id)) places.push(p); });
+  const hits = rateHits();
+  const hostOf = (e) => { try { return new URL(e.url).hostname; } catch { return ''; } };
+  const rows = places.map(p => {
+    const mine = all.filter(e => placeOf(e).id === p.id);
+    const perMin = mine.filter(e => now - ts(e) <= 60000).length;
+    const hit = hits[p.id] && Number.isFinite(hits[p.id].count) ? hits[p.id] : null;
+    // a limit found by hitting it replaces the published one (or "Not published") for that place
+    const eff = hit ? { count: hit.count, unit: hit.unit === 'hour' ? 'hour' : 'minute', ms: hit.unit === 'hour' ? 3600000 : 60000, onlyHost: p.limit && p.limit.onlyHost } : p.limit;
+    let limitText = p.note, limitSub = '', usage = '', orange = !!hit;
+    if (hit) {
+      limitText = `${eff.count.toLocaleString()} per ${eff.unit}`;
+      limitSub = `Found by hitting the limit · ${new Date(hit.at).toLocaleString()}`;
+    }
+    if (eff) {
+      const counted = mine.filter(e => now - ts(e) <= eff.ms && (!eff.onlyHost || hostOf(e) === eff.onlyHost));
+      usage = `${counted.length} of ${eff.count.toLocaleString()} this ${eff.unit}`;
+    } else {
+      // no published figure: show what the server itself reported with its latest answer, if it sent one
+      const seen = mine.slice().reverse().find(e => e.rlLimit != null);
+      if (seen) { limitText = `${seen.rlLimit.toLocaleString()} (reported by the server)`; usage = seen.rlRemaining != null ? `${seen.rlRemaining.toLocaleString()} left at ${new Date(seen.timestamp).toLocaleTimeString()}` : ''; }
+      else {
+        // no limit found: it is above the most requests that went through in a minute so far (a dash while there are none)
+        const peak = peakPerMinute(mine, ts);
+        limitText = peak ? `>${peak.toLocaleString()}` : '—';
+        limitSub = peak ? 'Not hit yet' : '';
+        orange = true;
+      }
+    }
+    const waited = mine.slice().reverse().find(e => e.status === 429 && e.retryAfter != null);
+    return `<div class="rl-row${mine.length ? '' : ' idle'}">
+      <span class="rl-name">${escapeHtml(p.name)}</span>
+      <span class="rl-limit${orange ? ' found' : ''}">${escapeHtml(limitText)}${limitSub ? `<small>${escapeHtml(limitSub)}</small>` : ''}</span>
+      <span class="rl-now"><b>${perMin}</b>/min${usage ? ` · ${escapeHtml(usage)}` : ''}${waited ? ` · asked to wait ${waited.retryAfter}s` : ''}</span>
+    </div>`;
+  }).join('');
+  const any = Object.keys(hits).length > 0;
+  box.innerHTML = `<div class="rl-titlebar"><div class="rl-title">Rate limits</div>
+      <button type="button" class="btn btn-ghost small-btn" data-rl-clear data-tip="Forget the limits found by hitting them"${any ? '' : ' disabled'}>Clear found limits</button></div>
+    <div class="rl-head"><span>Place</span><span>Limit</span><span>This app now</span></div>${rows}
+    <div class="rl-key"><i></i><span>Orange: a limit found by using the app. A number is what went through in that period when the place answered 429 (too many requests); “>” is the most that went through in a minute so far without one; a dash means no requests yet. A found number stays until it is cleared or a later 429 changes it.</span></div>
+    <p class="dim rl-foot">Only limits the services publish are listed otherwise: Google Drive’s and GitHub’s. The AREDL API, Newgrounds, YouTube and the game server don’t publish one, so the app keeps its own requests few and spaced out. “Reported by the server” shows a limit a response itself declared.</p>`;
+}
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-rl-clear]');
+  if (!btn || btn.disabled) return;
+  setSetting('rateLimitHits', {});
+  renderApiLog();
+});
+
 async function loadApiLog() {
   const all = await window.aredl.getRequestLog();
   apiLog = all.filter(e => e.kind !== 'misc');
   miscLog = all.filter(e => e.kind === 'misc');
+  all.slice().sort((x, y) => new Date(x.timestamp) - new Date(y.timestamp)).forEach(e => learnRateLimit(e, all));
   renderApiLog();
 }
 window.aredl.onNewRequestLog((entry) => {
   const target = entry.kind === 'misc' ? miscLog : apiLog;
   target.push(entry);
   if (target.length > 500) target.shift();
+  learnRateLimit(entry, apiLog.concat(miscLog));
   renderApiLog();
 });
 
@@ -1774,7 +1940,7 @@ function rememberSong(id, info) { if (info && info.name) { songNames.set(String(
 // the Song box in a level's details follows along when a name becomes known (no need to leave the tab and come back)
 let songStatsQueued = false;
 function refreshSongStats() {
-  document.querySelectorAll('[data-song-stat]').forEach(el => { el.innerHTML = songHtmlFor({ song: Number(el.dataset.songStat), level_id: el.dataset.songLevel || null }); });
+  document.querySelectorAll('[data-song-stat]').forEach(el => { el.innerHTML = songHtmlFor({ song: el.dataset.songStat === '' ? null : Number(el.dataset.songStat), level_id: el.dataset.songLevel || null }); });
 }
 function queueSongStats() { if (songStatsQueued) return; songStatsQueued = true; requestAnimationFrame(() => { songStatsQueued = false; refreshSongStats(); }); }
 function songLabelOf(id) {
@@ -2624,7 +2790,7 @@ function plResolve(e) {
   // the AREDL placement as a number (from the list, or from what you typed when that field is off Auto): #1 is an Infinite Demon
   const topNum = auto.placement === false ? (parseInt(String(man.placement || '').replace(/\D/g, ''), 10) || null) : (sn.position ?? null);
   return {
-    difficulty: plDiffAuto(e) ? plAutoDifficulty(tierNum, topNum) : (e.difficulty || ''),
+    difficulty: plDiffAuto(e) ? plAutoDifficulty(tierNum, topNum, e.mode || 'classic') : (e.difficulty || ''),
     name: auto.name === false ? (man.name || '') : (sn.name || e.snap?.name || ''),
     id: auto.id === false ? (man.id || '') : (sn.level_id ?? e.level_id ?? ''),
     placement: auto.placement === false ? (man.placement || '—') : placementAuto,
@@ -2834,25 +3000,27 @@ function renderPersonal() {
   $('#plProgress').innerHTML = progress.length ? head('Run', true) + withSubheads(progress, true, appSettings.plProgressSort) : '';
 }
 
-// Difficulty names and their colours (same set as the Demon difficulty chart)
-const PL_DIFFS = {
-  'Bizarre Demon': '#a63a1b', 'Brutal Demon': '#9a3216', 'Extreme Demon': '#8e2d13', 'Radical Demon': '#832810',
-  'Supreme Demon': '#78230d', 'Ultimate Demon': '#6a1f0b', 'Horrendous Demon': '#5b1a09', 'Inhumane Demon': '#4b0e10',
-  'Slaughter Demon': '#3f0f24', 'Apocalyptic Demon': '#35113f', 'Divine Demon': '#2a0f4a', 'Silent Demon': '#1b0a30', 'Infinite Demon': '#000000',
-};
-// Which difficulty a tier is, for the entries on Auto (the Demon difficulty list): the tier is rounded to the nearest whole number, 39 and up is a
-// Silent Demon, and the AREDL #1 is an Infinite Demon whatever its tier. Below Tier 21 there is no name.
-const PL_DIFF_BY_TIER = {
-  21: 'Bizarre Demon', 22: 'Brutal Demon', 23: 'Extreme Demon', 24: 'Radical Demon', 25: 'Radical Demon', 26: 'Supreme Demon', 27: 'Supreme Demon',
-  28: 'Ultimate Demon', 29: 'Horrendous Demon', 30: 'Horrendous Demon', 31: 'Inhumane Demon', 32: 'Inhumane Demon', 33: 'Slaughter Demon',
-  34: 'Slaughter Demon', 35: 'Apocalyptic Demon', 36: 'Apocalyptic Demon', 37: 'Divine Demon', 38: 'Divine Demon',
-};
-function plAutoDifficulty(tier, position) {
-  if (position === 1) return 'Infinite Demon';
-  if (tier == null || !Number.isFinite(tier)) return '';
-  const t = Math.round(tier);
-  return t >= 39 ? 'Silent Demon' : (PL_DIFF_BY_TIER[t] || '');
+// The Demon difficulties: the tiers each one covers, and its colour. One table for the personal list and for a level's Difficulty.
+const DEMON_DIFFS = [
+  { name: 'Bizarre Demon', lo: 20, hi: 21, color: '#a63a1b' }, { name: 'Brutal Demon', lo: 22, hi: 22, color: '#9a3216' },
+  { name: 'Extreme Demon', lo: 23, hi: 23, color: '#8e2d13' }, { name: 'Radical Demon', lo: 24, hi: 25, color: '#832810' },
+  { name: 'Supreme Demon', lo: 26, hi: 27, color: '#78230d' }, { name: 'Ultimate Demon', lo: 28, hi: 28, color: '#6a1f0b' },
+  { name: 'Horrendous Demon', lo: 29, hi: 30, color: '#5b1a09' }, { name: 'Inhumane Demon', lo: 31, hi: 32, color: '#4b0e10' },
+  { name: 'Slaughter Demon', lo: 33, hi: 34, color: '#3f0f24' }, { name: 'Apocalyptic Demon', lo: 35, hi: 36, color: '#35113f' },
+  { name: 'Divine Demon', lo: 37, hi: 38, color: '#2a0f4a' }, { name: 'Silent Demon', lo: 39, hi: null, color: '#1b0a30' },
+  { name: 'Infinite Demon', lo: null, hi: null, top: 1, color: '#000000' },
+];
+const PL_DIFFS = Object.fromEntries(DEMON_DIFFS.map(d => [d.name, d.color]));
+const diffTierText = (d) => (d.top ? `Top ${d.top}` : d.hi == null ? `Tiers ${d.lo}+` : d.lo === d.hi ? `Tier ${d.lo}` : `Tiers ${d.lo}\u2013${d.hi}`);
+// Which difficulty a level is: its tier rounded to the nearest whole number, and the #1 of the classic list is an Infinite Demon whatever its tier.
+// Below Tier 20 there is none.
+function demonDiffFor(tier, position, mode = 'classic') {
+  if (position === 1 && mode !== 'platformer') return DEMON_DIFFS[DEMON_DIFFS.length - 1];
+  if (tier == null || tier === '' || !Number.isFinite(Number(tier))) return null;
+  const t = Math.round(Number(tier));
+  return DEMON_DIFFS.find(d => d.lo != null && t >= d.lo && (d.hi == null || t <= d.hi)) || null;
 }
+const plAutoDifficulty = (tier, position, mode) => { const d = demonDiffFor(tier, position, mode); return d ? d.name : ''; };
 // An entry made before Auto existed keeps the difficulty it has; one with none, and every new one, is on Auto.
 const plDiffAuto = (e) => (e.auto && typeof e.auto.difficulty === 'boolean' ? e.auto.difficulty : !e.difficulty);
 const plPhysicsOf = (e) => (e.auto && e.auto.physics === true ? e.version : e.physics) || '';
@@ -3023,7 +3191,7 @@ function plSyncDifficulty() {
   if (on) {
     const tier = parseFloat(String(plInput('Tier').value).replace(',', '.'));
     const top = (String(plInput('Placement').value).match(/^\s*top\s*(\d+)\s*$/i) || [])[1];
-    sel.value = plAutoDifficulty(Number.isFinite(tier) ? tier : null, top ? Number(top) : null);
+    sel.value = plAutoDifficulty(Number.isFinite(tier) ? tier : null, top ? Number(top) : null, plMode);
   }
   sel.disabled = on;
   const btn = sel.closest('.dd') && sel.closest('.dd').querySelector('.dd-btn');
@@ -4141,6 +4309,10 @@ function starSvg(cls) {
 // already playing isn't torn down and reloaded (that was the lag spike).
 function videoStageHtml(multi) {
   return `<div class="video-stage${multi ? ' multi' : ''}" id="videoStage">
+    <div class="video-bar" id="videoBar">
+      <button type="button" class="vbar-btn" data-find-video data-tip="Search YouTube for a video of this level and play the first that works">Find Video</button>
+      <button type="button" class="vbar-btn" data-popout data-tip="Move the playing video to the corner player" disabled>Popout</button>
+    </div>
     <button class="multi-nav" data-multi-nav="-1" title="Previous level" aria-label="Previous level">&lt;</button>
     <div id="panelVideoZone"${multi ? ' class="multi-video-zone"' : ''}></div>
     <button class="multi-nav" data-multi-nav="1" title="Next level" aria-label="Next level">&gt;</button>
@@ -4209,16 +4381,196 @@ function songHtmlFor(level) {
   if (level.song == null) return '—';
   if (level.song < 0) {
     const o = officialSong(level.song);
-    return o ? `<span title="One of the game’s own songs">${escapeHtml(o.name)}</span> <span class="song-known">· ${escapeHtml(o.artist)}</span>` : 'DEFAULT';
+    return o ? `<span class="song-main" title="One of the game’s own songs">${escapeHtml(o.name)}</span><span class="song-known song-line">${escapeHtml(o.artist)}</span>` : 'DEFAULT';
   }
   const known = songLabelOf(level.song);
   // not looked up yet: a button right here loads the name (it also fills in everywhere else the song shows)
-  const loadBtn = !known && appSettings.showSongNames !== false ? ` <button type="button" class="song-load" data-song-load="${escapeHtml(level.song)}" title="Look up this song’s name">Load name</button>` : '';
-  return `<span class="song-id" role="button" tabindex="0" data-song-id="${escapeHtml(level.song)}" data-song-level="${escapeHtml(level.level_id ?? '')}" data-tip="Other levels with this song">${escapeHtml(level.song)}</span> <a class="song-link" href="https://www.newgrounds.com/audio/listen/${level.song}" target="_blank" rel="noopener" title="Open on Newgrounds">↗</a>${known ? ` <span class="song-known">· ${escapeHtml(known)}</span>` : loadBtn}`;
+  const loadBtn = !known && appSettings.showSongNames !== false ? `<button type="button" class="song-load" data-song-load="${escapeHtml(level.song)}" title="Look up this song’s name">Load name</button>` : '';
+  // the number and its link stay on the first line; the name goes under them, at most two lines, the whole of it in the tooltip
+  return `<span class="song-main"><span class="song-id" role="button" tabindex="0" data-song-id="${escapeHtml(level.song)}" data-song-level="${escapeHtml(level.level_id ?? '')}" data-tip="Other levels with this song">${escapeHtml(level.song)}</span> <a class="song-link" href="https://www.newgrounds.com/audio/listen/${level.song}" target="_blank" rel="noopener" title="Open on Newgrounds">↗</a></span>${known ? `<span class="song-known song-line" data-tip="${escapeHtml(known)}">${escapeHtml(known)}</span>` : (loadBtn ? `<span class="song-line">${loadBtn}</span>` : '')}`;
 }
-function levelIdHtmlFor(level) {
-  return level.level_id == null ? '—' : `<span class="copyable" data-copy="${escapeHtml(level.level_id)}" data-copy-label="Level ID" title="Click to copy">${escapeHtml(level.level_id)}</span>`;
+function levelIdHtmlFor(level, multi = false) {
+  const id = level.level_id == null ? '—' : `<span class="copyable" data-copy="${escapeHtml(level.level_id)}" data-copy-label="Level ID" title="Click to copy">${escapeHtml(level.level_id)}</span>`;
+  // under the ID: the level's custom copies (see ccFillSlots). A single level loads them by itself; in multi-select a button loads them.
+  return `${id}<div class="cc-slot" data-cc-level="${escapeHtml(level.id)}" data-cc-mode="${tabModes.list === 'platformer' ? 'platformer' : 'classic'}"${multi ? ' data-cc-multi' : ''}></div>`;
 }
+
+// ---- A level's Difficulty (in its info, beside the GDDL tier) ----
+// Closed it is just the name, with no colour; opened it lists every difficulty with the tiers it covers, each in its own colour.
+function diffCellHtml(level) {
+  const d = demonDiffFor(level.gddl_tier, level.position, tabModes.list === 'platformer' ? 'platformer' : 'classic');
+  return d
+    ? `<span class="diff-name">${escapeHtml(d.name)}</span><button type="button" class="diff-eye" data-diff="${escapeHtml(d.name)}" data-tip="All difficulties" aria-label="Show all difficulties"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>`
+    : '';
+}
+// The eye opens a window (the same kind as a pack’s) listing every difficulty with the tiers it covers, each in its own colour, with the level’s own on top.
+// The rows only give information: nothing in the list can be chosen.
+function openDiffModal(name) {
+  const cur = DEMON_DIFFS.find(d => d.name === name);
+  const m = fx.openModal({ title: 'Difficulties', wide: true });
+  m.body.innerHTML = `
+    ${cur ? `<div class="pack-view-top" style="--pack-bg:${cur.color};">
+      <span class="pack-tier">${escapeHtml(cur.name)}</span>
+      <span class="pack-view-stat"><strong>${escapeHtml(diffTierText(cur))}</strong></span>
+      <span class="pack-view-stat">this level’s difficulty</span>
+    </div>` : ''}
+    <div class="pack-level-list diff-list">${DEMON_DIFFS.map(d => `<div class="completed-banner diff-row${d.name === name ? ' current' : ''}" style="--c:${d.color};">
+      <span class="c-rank">${escapeHtml(diffTierText(d))}</span>
+      <div class="c-main"><div class="c-name">${escapeHtml(d.name)}</div></div>
+    </div>`).join('')}</div>`;
+}
+document.addEventListener('click', (e) => {
+  const eye = e.target.closest('.diff-eye');
+  if (eye) openDiffModal(eye.dataset.diff);
+});
+
+// ---- Custom copies (LDMs, bugfixes, ...): one request per level (GET levels/{id}/custom-copies). A single level's panel asks for them when it opens;
+// in multi-select a "Load custom copies" button asks. "View custom copies" shows up under the ID only when the level has some ----
+const ccCache = new Map(); // `${mode}:${level id}` -> { list, loading, failedAt }
+const CC_TYPE_COLORS = { BUGFIX: '#4ade80', LDM: '#38bdf8', 'GLOBED COPY': '#c084fc', OTHER: '#a1a1aa' };
+const ccKey = (mode, levelId) => `${mode}:${levelId}`;
+// One entry of the list (fields: id, level_id, copy_id, added_by, id_type, status, description, created_at) -> a copy.
+// id_type is Bugfix | GlobedCopy | Ldm | Other; status is Published | Allowed | Banned.
+function ccNormalize(o) {
+  if (!o || typeof o !== 'object') return null;
+  const copyId = o.copy_id == null || o.copy_id === '' ? null : String(o.copy_id);
+  const types = [].concat(o.id_type ?? []).filter(t => typeof t === 'string' && t)
+    .map(t => t.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim().toUpperCase());
+  const status = String(o.status ?? '').trim();
+  return { id: copyId, types, banned: /^banned$/i.test(status), status, notes: String(o.description ?? '').trim(), createdAt: o.created_at || null, raw: o };
+}
+function loadCustomCopies(level, mode) {
+  const key = ccKey(mode, level.id);
+  const c = ccCache.get(key);
+  if (c && (c.loading || c.list || (c.failedAt && Date.now() - c.failedAt < 120000))) return Promise.resolve(c);
+  const entry = { list: null, loading: true, failedAt: 0 };
+  ccCache.set(key, entry);
+  ccFillSlots();
+  return window.aredl.getCustomCopies(level.id, mode)
+    .then(raw => {
+      const arr = Array.isArray(raw) ? raw : (raw && (raw.data || raw.items || raw.results)) || [];
+      entry.list = arr.map(ccNormalize).filter(Boolean);
+    })
+    .catch(err => { entry.failedAt = Date.now(); console.warn('[custom copies]', err); }) // (not shown; tried again later)
+    .then(() => { entry.loading = false; ccFillSlots(); return entry; });
+}
+function ccFillSlots() {
+  document.querySelectorAll('.cc-slot').forEach(slot => {
+    const c = ccCache.get(ccKey(slot.dataset.ccMode || 'classic', slot.dataset.ccLevel));
+    const multi = slot.hasAttribute('data-cc-multi');
+    let html = '';
+    if (c && c.loading) html = '<span class="cc-note">Loading custom copies…</span>';
+    else if (c && c.list) html = c.list.length ? '<button type="button" class="cc-btn" data-cc-open>View custom copies</button>' : (multi ? '<span class="cc-note">No custom copies</span>' : '');
+    else if (multi) html = `<button type="button" class="cc-btn" data-cc-load>${c && c.failedAt ? 'Retry custom copies' : 'Load custom copies'}</button>`;
+    if (slot.innerHTML !== html) slot.innerHTML = html;
+  });
+}
+// the single-level panel loads on its own; multi-select only shows what a button has loaded
+function ccRefresh(level, multi) {
+  if (!multi && level) loadCustomCopies(level, tabModes.list === 'platformer' ? 'platformer' : 'classic');
+  ccFillSlots();
+}
+function ccOpen(level, mode) {
+  const c = ccCache.get(ccKey(mode, level.id));
+  const list = (c && c.list) || [];
+  if (!list.length) return;
+  const fmtDate = (v) => { const d = v ? new Date(v) : null; return d && !isNaN(d) ? d.toLocaleDateString() : ''; };
+  const card = (c) => `<div class="cc-card${c.banned ? ' banned' : ''}">
+      <div class="cc-head">
+        ${c.types.map(t => `<span class="cc-type" style="--c:${CC_TYPE_COLORS[t] || '#a1a1aa'}">${escapeHtml(t)}</span>`).join('')}
+        ${c.id ? `<span class="cc-id copyable" data-copy="${escapeHtml(c.id)}" data-copy-label="Copy ID" title="Click to copy">ID: ${escapeHtml(c.id)}</span>` : ''}
+        ${c.banned ? '<span class="cc-banned">BANNED</span>' : (c.status ? `<span class="cc-status">${escapeHtml(c.status.toUpperCase())}</span>` : '')}
+      </div>
+      <div class="cc-notes"><b>Notes:</b> ${escapeHtml(c.notes || 'No description provided.')}</div>
+      ${fmtDate(c.createdAt) ? `<div class="cc-date">Added ${escapeHtml(fmtDate(c.createdAt))}</div>` : ''}
+    </div>`;
+  const section = (title, items) => (items.length ? `<div class="cc-section">${title}</div>${items.map(card).join('')}` : '');
+  const m = fx.openModal({ title: 'Custom Copies', wide: true });
+  m.body.innerHTML = `<p class="cc-intro">Custom copies of <b>${escapeHtml(level.name)}</b> that list staff have already reviewed. A copy that isn’t listed as allowed needs to be approved by list staff on Discord before it is used for a submission.</p>`
+    + section('Allowed copies', list.filter(c => !c.banned)) + section('Banned copies', list.filter(c => c.banned))
+    + rawDetails('Full API response', list.map(c => c.raw));
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cc-open], [data-cc-load]');
+  if (!b) return;
+  const slot = b.closest('.cc-slot');
+  if (!slot) return;
+  const mode = slot.dataset.ccMode || 'classic';
+  const level = levelsOf(mode).find(l => String(l.id) === String(slot.dataset.ccLevel));
+  if (!level) return;
+  if (b.hasAttribute('data-cc-load')) loadCustomCopies(level, mode); else ccOpen(level, mode);
+});
+
+// ---- "Find video": for a video YouTube won't play here. Searches YouTube for the level's name + "gd" in the background and tries the first ten
+// results in the miniplayer, the next one when a video can't be played either ----
+async function findVideoFor(name, btn, returnTo = null) {
+  if (btn.disabled) return;
+  const label = btn.textContent;
+  const reset = () => { btn.disabled = false; btn.textContent = label; delete btn.dataset.busy; updateVideoBar(); };
+  btn.disabled = true; btn.dataset.busy = '1'; btn.textContent = 'Searching…';
+  let ids = [];
+  try { ids = ((await window.aredl.searchYouTube(`${name} gd`)) || {}).ids || []; }
+  catch (err) { showToast(`Couldn't search YouTube: ${errMsg(err)}`); reset(); return; }
+  ids = ids.slice(0, 10);
+  if (!ids.length) { showToast('No video was found for that level'); reset(); return; }
+  for (let i = 0; i < ids.length; i++) {
+    btn.textContent = `Trying video ${i + 1} of ${ids.length}…`;
+    const d = miniPlay({ vid: ids[i], title: name, returnTo, found: true });
+    // it plays, or YouTube says it can't within a few seconds (or the player was closed: then it stops here)
+    const ok = await new Promise((resolve) => {
+      const t0 = Date.now();
+      const tick = setInterval(() => {
+        if (!docks.has(d)) { clearInterval(tick); resolve(true); }
+        else if (d.error) { clearInterval(tick); resolve(false); }
+        else if (d.playing || Date.now() - t0 > 7000) { clearInterval(tick); resolve(true); }
+      }, 200);
+    });
+    if (ok) { reset(); return; }
+    d.destroy();
+  }
+  showToast(`None of the first ${ids.length} results could be played here`);
+  reset();
+}
+// The level the bar above the video is about: the selected one, or the one on show in a range.
+function barLevel() {
+  const id = state.multi.size >= 2 ? state.multiViewId : state.selectedId;
+  return state.levels.find(l => String(l.id) === String(id)) || null;
+}
+document.addEventListener('click', (e) => {
+  const find = e.target.closest('[data-find-video]');
+  if (find && !find.disabled) {
+    const level = barLevel();
+    if (level) findVideoFor(level.name, find, () => jumpToLevel(level.level_id, modeOfLevel(level)));
+    return;
+  }
+  const pop = e.target.closest('[data-popout]');
+  if (pop && !pop.disabled) popOutNow();
+});
+// The video that can be popped out: the page's own while it plays, or one that was closed with “keep playing” and is still going.
+function popTarget() {
+  if (currentDock && currentDock.mode !== 'corner' && currentDock.isPlaying() && !currentDock.standalone) return currentDock;
+  return [...docks].find(d => d.mode === 'hidden' && d.isPlaying() && d.host === 'window' && (d.userHidden || d.standalone)) || null;
+}
+function popOutNow() {
+  const d = popTarget();
+  if (!d) return;
+  if (d.host === 'window') { d.popOut(); return; }
+  // a player inside the page can't leave it: a corner player of its own carries on from the same moment
+  const ctx = d.slot && d.slot._ctx;
+  miniPlay({ vid: d.vid, title: d.title, time: d.liveTime(), returnTo: ctx && ctx.onReturn ? ctx.onReturn : null });
+}
+// Find Video is off while a video it found is playing (also the one in a video's error message); Popout is on while there is a video to pop out.
+function updateVideoBar() {
+  const foundPlaying = [...docks].some(d => d.found && d.isPlaying());
+  document.querySelectorAll('[data-find-video], .slot-find').forEach(b => {
+    if (b.dataset.busy) return;
+    b.disabled = foundPlaying;
+    b.title = foundPlaying ? 'A video found with this button is playing. Close it first.' : '';
+  });
+  const can = !!popTarget();
+  document.querySelectorAll('[data-popout]').forEach(b => { b.disabled = !can; });
+}
+setInterval(updateVideoBar, 400);
 function gddlText(level) { return level.gddl_tier != null ? fmtTier(level.gddl_tier) : '—'; }
 function enjText(level) { return level.edel_enjoyment != null ? Math.round(level.edel_enjoyment) + '%' : '—'; }
 
@@ -4299,6 +4651,64 @@ function applyDetailHtml(html) {
   $('#detailInner').innerHTML = html;
 }
 
+// One box of the level info grid; a box with nothing to show is left out (the Song box is always shown).
+function factHtml(label, has, valueHtml, { attrs = '', cls = '' } = {}) {
+  if (!has) return '';
+  return `<div class="stat-plain${cls === 'fact-song' ? ' fact-song' : ''}"><div class="stat-label">${label}</div><div class="stat-value${cls && cls !== 'fact-song' ? ' ' + cls : ''}"${attrs ? ' ' + attrs : ''}>${valueHtml}</div></div>`;
+}
+// The level info is always two rows: Level ID, List Points and Edel Enjoyment on top; Song, NLW Tier, GDDL Tier and Difficulty below (Song is always in the bottom row).
+function factRowHtml(boxes) {
+  const html = boxes.join('');
+  return html ? `<div class="fact-row">${html}</div>` : '';
+}
+// ---- Level panel layout touches ----
+// 1) The text in a level info box grows (up to 30px) while it still fits its box on one line and the rows do not get taller, so a short value fills its box
+//    and a long one stays at the normal size. It differs from level to level.
+function fitLevelFacts() {
+  document.querySelectorAll('#detailInner .level-facts').forEach((grid) => {
+    if (!grid.offsetWidth) return;
+    const vals = [...grid.querySelectorAll('.fact-row > .stat-plain:not([hidden]) > .stat-value')];
+    const rows = [...grid.querySelectorAll(':scope > .fact-row')];
+    vals.forEach(v => { v.style.fontSize = ''; });
+    if (!vals.length) return;
+    const tallest = () => Math.max(...rows.map(r => r.getBoundingClientRect().height));
+    const base = tallest();
+    vals.forEach((v) => {
+      const b = parseFloat(getComputedStyle(v).fontSize) || 16;
+      const fits = (px) => {
+        v.style.fontSize = px + 'px'; v.style.whiteSpace = 'nowrap'; v.style.flexWrap = 'nowrap';
+        const ok = v.scrollWidth <= v.clientWidth && tallest() <= base + 0.5;
+        v.style.whiteSpace = ''; v.style.flexWrap = '';
+        return ok;
+      };
+      if (!fits(b)) { v.style.fontSize = ''; return; }
+      let lo = b, hi = Math.max(b, 30);
+      while (hi - lo > 0.5) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+      v.style.fontSize = lo > b ? Math.floor(lo * 2) / 2 + 'px' : '';
+    });
+  });
+}
+// 2) The video bar sits beside the video's top-right corner while the panel is wide enough, above the video (compact) when it is not.
+function placeVideoBar() {
+  const stage = document.getElementById('videoStage'), bar = document.getElementById('videoBar');
+  if (!stage || !bar) return;
+  const used = stage.classList.contains('multi') ? 728 : Math.min(640, stage.clientWidth);
+  bar.classList.toggle('above', stage.clientWidth < used + 12 + 160);
+}
+let detailLayoutQueued = false;
+function queueDetailLayout() {
+  if (detailLayoutQueued) return;
+  detailLayoutQueued = true;
+  requestAnimationFrame(() => { detailLayoutQueued = false; placeVideoBar(); fitLevelFacts(); });
+}
+(function watchDetailLayout() {
+  const root = document.getElementById('detailInner');
+  if (!root) return;
+  new MutationObserver(queueDetailLayout).observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden'] });
+  if (window.ResizeObserver) new ResizeObserver(queueDetailLayout).observe(root);
+  window.addEventListener('resize', queueDetailLayout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(queueDetailLayout);
+})();
 function selectLevel(level, { force = false } = {}) {
   // Clicking the level that's already open (and fully shown) does nothing - no re-fetching.
   const stageNow = document.getElementById('videoStage');
@@ -4319,6 +4729,7 @@ function selectLevel(level, { force = false } = {}) {
   // The number copies on click; the ↗ stays a separate link to Newgrounds.
   const songHtml = songHtmlFor(level);
   const levelIdHtml = levelIdHtmlFor(level);
+  const diffHtml = diffCellHtml(level);
 
   const detailHtml = `
     <h2 class="detail-title">${level.position != null ? `<span class="title-pos">#${level.position}</span><span class="title-divider"></span>` : ''}${escapeHtml(level.name)}${levelToolsHtml(level, { follow: true, song: true })}</h2>
@@ -4330,19 +4741,25 @@ function selectLevel(level, { force = false } = {}) {
         const mode = state.tagFilters[key] || '';
         return `<span class="tag-pill ${mode}" data-apply-tag="${escapeHtml(key)}">${escapeHtml(t)}</span>`;
       }).join('')}</div>
-      <div class="stat-plain-grid">
-        <div class="stat-plain"><div class="stat-label">Level ID</div><div class="stat-value">${levelIdHtml}</div></div>
-        <div class="stat-plain"><div class="stat-label">List Points</div><div class="stat-value">${formatPoints(level.points)}</div></div>
-        <div class="stat-plain"><div class="stat-label">Edel Enjoyment</div><div class="stat-value">${enj}</div></div>
-        <div class="stat-plain"><div class="stat-label">Song</div><div class="stat-value" data-song-stat="${escapeHtml(level.song ?? '')}" data-song-level="${escapeHtml(level.level_id ?? '')}">${songHtml}</div></div>
-        <div class="stat-plain"><div class="stat-label">NLW Tier</div><div class="stat-value">${escapeHtml(level.nlw_tier || '—')}</div></div>
-        <div class="stat-plain"><div class="stat-label">GDDL Tier</div><div class="stat-value">${gddl}</div></div>
+      <div class="stat-plain-grid level-facts">
+        ${factRowHtml([
+          factHtml('Level ID', level.level_id != null, levelIdHtml),
+          factHtml('List Points', level.points != null, formatPoints(level.points)),
+          factHtml('Edel Enjoyment', level.edel_enjoyment != null, enj),
+        ])}
+        ${factRowHtml([
+          factHtml('Song', true, songHtml, { attrs: `data-song-stat="${escapeHtml(level.song ?? '')}" data-song-level="${escapeHtml(level.level_id ?? '')}"`, cls: 'fact-song' }),
+          factHtml('NLW Tier', !!level.nlw_tier, escapeHtml(level.nlw_tier || '')),
+          factHtml('GDDL Tier', level.gddl_tier != null, gddl),
+          factHtml('Difficulty', !!diffHtml, diffHtml, { cls: 'diff-value' }),
+        ])}
       </div>
       <div id="panelCreditsZone"></div>
       <div id="panelHistoryZone"></div>
     </div>
   `;
   applyDetailHtml(detailHtml);
+  ccRefresh(level, false);
 
   loadLevelDetail(level);
   loadLevelHistory(level);
@@ -4532,13 +4949,21 @@ function updateMultiViewedUi() {
   if (!level || !document.querySelector('.multi-video-zone')) return;
   const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
   set('multiDesc', level.description ? linkifyLevels(level.description, level.level_id) : 'No description available.');
-  set('multiLevelId', levelIdHtmlFor(level));
+  set('multiLevelId', levelIdHtmlFor(level, true));
   set('multiPointsIndiv', `(${formatPoints(level.points)})`);
   set('multiEnjIndiv', `(${enjText(level)})`);
   set('multiSong', songHtmlFor(level));
   { const se = document.getElementById('multiSong'); if (se) { se.dataset.songStat = level.song == null ? '' : String(level.song); se.dataset.songLevel = level.level_id == null ? '' : String(level.level_id); } }
-  set('multiNlw', escapeHtml(level.nlw_tier || '—'));
-  set('multiGddl', escapeHtml(gddlText(level)));
+  set('multiNlw', escapeHtml(level.nlw_tier || ''));
+  set('multiGddl', level.gddl_tier != null ? escapeHtml(gddlText(level)) : '');
+  set('multiDiff', diffCellHtml(level));
+  // a box with nothing to show is hidden for this level (the Song box never is)
+  const showFact = (id, has) => { const box = document.getElementById(id) && document.getElementById(id).closest('.stat-plain'); if (box) box.hidden = !has; };
+  showFact('multiLevelId', level.level_id != null);
+  showFact('multiNlw', !!level.nlw_tier);
+  showFact('multiGddl', level.gddl_tier != null);
+  showFact('multiDiff', !!document.getElementById('multiDiff').innerHTML);
+  ccRefresh(level, true);
   const own = new Set((level.tags || []).map(t => String(t).toLowerCase()));
   document.querySelectorAll('#multiTags .tag-pill').forEach(el => el.classList.toggle('in-level', own.has(el.dataset.applyTag)));
   markCurrentPublisher(level);
@@ -4597,13 +5022,18 @@ function renderMultiSelection() {
     const restHtml = `
         <p class="detail-desc" id="multiDesc"></p>
         <div class="video-tags" id="multiTags">${tagsHtml}</div>
-        <div class="stat-plain-grid">
-          <div class="stat-plain"><div class="stat-label">Level ID</div><div class="stat-value" id="multiLevelId">—</div></div>
-          <div class="stat-plain"><div class="stat-label">Combined List Points</div><div class="stat-value"><span id="multiPoints">${formatPoints(totalPoints)}</span> <span class="stat-indiv" id="multiPointsIndiv"></span></div></div>
-          <div class="stat-plain"><div class="stat-label">Average EDEL Enjoyment</div><div class="stat-value"><span id="multiEnj">${enj}</span> <span class="stat-indiv" id="multiEnjIndiv"></span></div></div>
-          <div class="stat-plain"><div class="stat-label">Song</div><div class="stat-value" id="multiSong">—</div></div>
-          <div class="stat-plain"><div class="stat-label">NLW Tier</div><div class="stat-value" id="multiNlw">—</div></div>
-          <div class="stat-plain"><div class="stat-label">GDDL Tier</div><div class="stat-value" id="multiGddl">—</div></div>
+        <div class="stat-plain-grid level-facts">
+          <div class="fact-row">
+            <div class="stat-plain"><div class="stat-label">Level ID</div><div class="stat-value" id="multiLevelId">—</div></div>
+            <div class="stat-plain"><div class="stat-label">Combined List Points</div><div class="stat-value"><span id="multiPoints">${formatPoints(totalPoints)}</span> <span class="stat-indiv" id="multiPointsIndiv"></span></div></div>
+            <div class="stat-plain"><div class="stat-label">Average EDEL Enjoyment</div><div class="stat-value"><span id="multiEnj">${enj}</span> <span class="stat-indiv" id="multiEnjIndiv"></span></div></div>
+          </div>
+          <div class="fact-row">
+            <div class="stat-plain fact-song"><div class="stat-label">Song</div><div class="stat-value" id="multiSong">—</div></div>
+            <div class="stat-plain"><div class="stat-label">NLW Tier</div><div class="stat-value" id="multiNlw">—</div></div>
+            <div class="stat-plain"><div class="stat-label">GDDL Tier</div><div class="stat-value" id="multiGddl">—</div></div>
+            <div class="stat-plain"><div class="stat-label">Difficulty</div><div class="stat-value diff-value" id="multiDiff">—</div></div>
+          </div>
         </div>
         <div id="multiCreditsZone"></div>
         <div id="multiPacksZone" class="multi-packs-zone"></div>
@@ -4629,6 +5059,7 @@ function renderMultiSelection() {
     $('#multiPoints').textContent = formatPoints(totalPoints);
     $('#multiEnj').textContent = enj;
   }
+  { const eb = document.getElementById('multiEnj') && document.getElementById('multiEnj').closest('.stat-plain'); if (eb) eb.hidden = enj === '—'; }
   if (typeof renderMultiPacks === 'function') renderMultiPacks();
 
   let settled = false; // true once every lookup has finished (so unresolved ids show a plain label)
@@ -4905,9 +5336,13 @@ function onDockStartedPlaying(d) {
 window.aredl.onPlayerReturn((r) => { // "Back to the level" on the popped-out player: the video's page opens, and the player docks over its video there
   const d = [...docks].find(x => x.id === r.id && x.mode === 'corner');
   if (!d) return;
-  d.auto = false; d.wantBack = Date.now();
+  d.auto = false; d.manual = false; d.wantBack = Date.now();
   if (d.onReturn) { try { d.onReturn(); } catch { /* the page could not be opened */ } }
 });
+window.aredl.onPlayerHide((r) => { const d = [...docks].find(x => x.id === r.id); if (d) d.keepPlaying(); }); // “Close the player, keep playing”
+// the app's window was closed (the X): every video goes with it, and nothing starts again until the window is back
+let appClosed = false;
+window.aredl.onWindowClosed(() => { appClosed = true; [...docks].forEach(d => d.destroy(false, true)); });
 window.aredl.onPlayerClosed((r) => { const d = [...docks].find(x => x.id === r.id); if (d) d.destroy(false, true); }); // the person closed the player
 // the app is minimised or tucked into the tray while a video plays: the video carries on in the corner
 window.aredl.onWindowAway(() => {
@@ -4917,6 +5352,7 @@ window.aredl.onWindowAway(() => {
 });
 // ...and when the app is back, a video that was on its level's page goes back to it (one that was in the corner stays there)
 window.aredl.onWindowBack(() => {
+  if (appClosed) { appClosed = false; requestAnimationFrame(redockIdleSlots); } // the window is back: each page's video gets a fresh, paused player
   const d = [...docks].find(x => x.mode === 'corner' && x.auto);
   if (d) d.auto = false; // (layout docks it again if its page is showing)
 });
@@ -5054,9 +5490,36 @@ class VideoDock {
     msg.textContent = `${why} (YouTube error ${this.error})`;
     a.href = `https://www.youtube.com/watch?v=${encodeURIComponent(this.vid)}`; a.target = '_blank'; a.rel = 'noopener'; a.textContent = 'Watch on YouTube ↗';
     box.append(msg, a);
+    const name = (slot._ctx && slot._ctx.title) || this.title || '';
+    if (name) { // look for another video of the level
+      const find = document.createElement('button');
+      find.type = 'button'; find.className = 'btn btn-ghost slot-find'; find.textContent = 'Find video';
+      find.addEventListener('click', () => findVideoFor(name, find, (slot._ctx && slot._ctx.onReturn) || null));
+      box.append(find);
+    }
     slot.classList.add('err');
   }
 
+  // The Popout button: the video goes to the corner player now, and stays there until it is sent back (it doesn't dock itself when its page is on screen)
+  popOut() {
+    if (this.host !== 'window' || !this.vid || !docks.has(this)) return;
+    this.userHidden = false;
+    if (this.mode === 'corner') return;
+    this.mode = 'corner'; this.auto = false; this.manual = !this.standalone; this.cornerSince = Date.now(); this.wantBack = 0; this.lastKey = '';
+    floatCtx = { vid: this.vid, dock: this, auto: false, live: true };
+    if (this.slot) setSlotState(this.slot, 'away');
+    [...docks].forEach(o => { if (o !== this && o.mode === 'corner') o.destroy(); }); // one popped-out player at a time
+    window.aredl.playerCorner({ id: this.id, instant: false, force: true });
+  }
+  // "Close the player, keep playing": the window goes out of sight and the video carries on (sound only). It stays so until Popout brings it back
+  // or, for a level's video, until that level's page is on screen again.
+  keepPlaying() {
+    if (this.host !== 'window' || !docks.has(this)) return;
+    this.userHidden = true; this.auto = false; this.manual = false; this.wantBack = 0;
+    if (floatCtx && floatCtx.dock === this) floatCtx = null;
+    this.mode = 'corner'; // (so hide() below isn't skipped)
+    this.hide();
+  }
   // popped out: the player window glides to the corner and goes on top of everything
   toCorner(auto = false) {
     if ((appSettings.videoOnLeave || 'popup') !== 'popup') return; // only with the setting “Move it to a corner player”
@@ -5121,7 +5584,11 @@ class VideoDock {
 
   layout() {
     if (!this.vid || !docks.has(this)) return;
-    if (this.standalone) return; // opened from a record: it stays in the corner until it is closed
+    if (this.standalone) return; // opened from a record or found for a level: it stays where it is until it is closed
+    if (this.userHidden && this.mode !== 'docked') { // closed with “keep playing”: it stays out of sight until its page is showing again
+      if (this.measure(0.04)) this.userHidden = false;
+      else { if (this.mode !== 'hidden') this.hide(); return; }
+    }
     this.frameNo++;
     if (this.error && this.mode !== 'corner') { this.showError(); return; }
     if (this.host === 'page' && this.frame && document.fullscreenElement === this.frame) return; // full screen: the browser lays the player out, nothing moves it
@@ -5184,6 +5651,7 @@ class VideoDock {
       return;
     }
     if (this.auto) return; // one sent away because the app was minimised comes back with the app
+    if (this.manual && !this.wantBack) return; // popped out with the Popout button: it stays until “Back to the level”
     if (this.wantBack) {
       if (this.measure(0.04)) this.dockBack();
       else if (Date.now() - this.wantBack > 4000) this.wantBack = 0;
@@ -5238,17 +5706,17 @@ function dockPlay({ vid, slot, title = '', onReturn = null, autoplay = false, ti
 
 // Play a record's video in the corner player, with no page behind it (`vid` for YouTube, `medal` = { id, hash } for a Medal clip, `twitch` = { kind, id, time }). It is a window of its
 // own whatever the “when a video isn't on screen” setting is: the person asked for it. One such player at a time; it stays until it is closed.
-function miniPlay({ vid = null, medal = null, twitch = null, title = '' }) {
+function miniPlay({ vid = null, medal = null, twitch = null, title = '', time = 0, returnTo = null, found = false }) {
   [...docks].forEach(d => { if (d.standalone || d.mode === 'corner') d.destroy(); });
   [...docks].forEach(d => { if (d.isPlaying()) { d.command('pauseVideo'); d.paused = true; } }); // (a video on a level's page doesn't keep playing beside it)
   const d = new VideoDock();
-  d.host = 'window'; d.standalone = true; d.title = title;
+  d.host = 'window'; d.standalone = true; d.title = title; d.found = found; d.onReturn = returnTo; // (the return target: the page it was started from; the video is not docked there)
   d.vid = medal ? 'medal:' + medal.id : twitch ? 'twitch:' + twitch.id : vid;
   d.mode = 'corner'; d.auto = false; d.cornerSince = Date.now();
   window.aredl.playerLoad({
     id: d.id, kind: medal ? 'medal' : twitch ? 'twitch' : 'youtube', vid: (medal || twitch) ? undefined : vid, mid: medal ? medal.id : undefined, mhash: medal ? medal.hash : undefined,
     tkind: twitch ? twitch.kind : undefined, tid: twitch ? twitch.id : undefined, ttime: twitch ? twitch.time : undefined,
-    standalone: true, time: 0, autoplay: true, title,
+    standalone: true, canReturn: !!returnTo, time: Math.max(0, Number(time) || 0), autoplay: true, title,
     rootCss: document.documentElement.style.cssText, bodyCss: document.body.style.cssText, bodyClass: [...document.body.classList].filter(c => c !== 'nav-editing').join(' '),
   }).catch(() => {}).then(() => window.aredl.playerCorner({ id: d.id, instant: true, force: true }));
   return d;
@@ -5257,6 +5725,7 @@ function miniPlay({ vid = null, medal = null, twitch = null, title = '' }) {
 // Back on a tab whose video slot lost its player (it was idle and got closed, or another video took over):
 // give it a fresh, paused YouTube player again instead of leaving a bare thumbnail.
 function redockIdleSlots() {
+  if (appClosed) return;
   document.querySelectorAll('.tab.active .video-slot.idle').forEach(slot => {
     const ctx = slot._ctx;
     if (!ctx) return;
@@ -5505,7 +5974,7 @@ function recordVideoMenu(btn, r) {
   const rc = btn.getBoundingClientRect();
   showContextMenu(rc.left, rc.bottom + 4, [
     { label: 'Open in browser', onClick: () => window.open(v.url, '_blank', 'noopener,noreferrer') },
-    { label: 'Play in miniplayer', disabled: !play, onClick: () => miniPlay({ ...play, title: recordName(r) }) },
+    { label: 'Play in miniplayer', disabled: !play, onClick: () => { const nav = currentNavSnapshot(); miniPlay({ ...play, title: recordName(r), returnTo: () => restoreNav(nav) }); } },
   ]);
 }
 
@@ -5522,9 +5991,9 @@ $('#recordsList').addEventListener('click', (e) => {
   lookupProfile(id);
 });
 
-// Records are fetched one page at a time and shown as they arrive. Leaving the level
-// (or the tab) stops the fetching; the first 50 pages (~1000 records) load
-// automatically and a button loads more.
+// Records are fetched one page at a time (100 per request) and shown as they arrive. Leaving the level
+// (or the tab) stops the fetching; the first 50 requests (5,000 records) load
+// automatically and a button loads more. The list shows 50 records per page either way.
 let recState = null;
 function abortRecords() {
   if (recState) { recState.token++; recState.loading = false; }
